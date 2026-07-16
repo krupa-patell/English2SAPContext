@@ -1,0 +1,90 @@
+theory Signed_Token_CertPath_P
+begin
+
+/* 
+  Model of a signed-and-encrypted token with a certification path.
+
+  Roles:
+    - A (Sender): creates a fresh nonce rA and timestamp tA, then sends to B:
+        (B -> A) , A{ tA, rA, B, sgnData, Bp[encData] }
+      Here, A{...} denotes appending a signature over a hash of the Info payload.
+      Bp[encData] = aenc(encData, pkB).
+
+    - B (Receiver): obtains Ap from the certification path (B -> A), verifies A's signature
+      over the Info payload, checks that B is the intended recipient, and decrypts encData.
+
+  Cryptographic primitives:
+    - Public-key encryption: aenc/adec
+    - Digital signatures: sign/verify
+    - Hash function: h
+
+  Intended security goals:
+    - Secrecy of encData: the adversary should not learn encData unless B's long-term key is revealed.
+    - Authentication (non-injective) of A to B: if B accepts a token, then either A sent it before,
+      or A's long-term signing key was revealed beforehand.
+*/
+
+builtins: asymmetric-encryption, signing, hashing
+
+let A(~skA, pkB) =
+  /* A constructs the signed token and sends it with a certification path B -> A. */
+  new tA;                 // timestamp (abstract)
+  new rA;                 // fresh, non-repeating number to prevent replay
+  new sgnData;            // non-confidential parameters
+  new encData;            // confidential parameters to be protected for B
+
+  let info = <'token', tA, rA, pkB, sgnData, aenc(encData, pkB)> in
+  let sig  = sign(h(info), ~skA) in
+  let path = <'cpath', pkB, pk(~skA)> in          // abstract certification path (B -> A)
+
+  event TokenSent(pk(~skA), pkB, tA, rA, sgnData, encData);
+  event SecretData(pk(~skA), pkB, encData);
+
+  out(<path, info, sig>)
+
+let B(~skB) =
+  /* B receives the certification path and signed token; verifies and decrypts. */
+  in(msg);
+  let <path, info, sig> = msg in
+  let <'cpath', pkB_path, pkA> = path in          // obtain A's public key from the path B -> A
+  if pkB_path = pk(~skB) then
+    if verify(sig, h(info), pkA) = true then
+      let <'token', tA, rA, pkB_info, sgnData, xenc> = info in
+      if pkB_info = pk(~skB) then                 // ensure B is the intended recipient
+        let encData = adec(xenc, ~skB) in
+        event TokenAccepted(pkA, pk(~skB), tA, rA, sgnData, encData)
+
+process:
+!(
+  new ~skA; out(pk(~skA));
+  !(
+    new ~skB; out(pk(~skB));
+    (
+        !A(~skA, pk(~skB))
+      | !B(~skB)
+      | (event LtkReveal(pk(~skA)); out(~skA))  /* optional compromise of A's signing key */
+      | (event LtkReveal(pk(~skB)); out(~skB))  /* optional compromise of B's decryption key */
+    )
+  )
+)
+
+lemma executability:
+  exists-trace
+  "Ex pkA pkB t r s d #i #j.
+      TokenAccepted(pkA, pkB, t, r, s, d) @ #i
+    & TokenSent(pkA, pkB, t, r, s, d) @ #j
+    & #j < #i"
+
+lemma secrecy_encData:
+  "All pkA pkB d #i.
+      SecretData(pkA, pkB, d) @ i
+    ==> not(Ex #j. K(d) @ j)
+        | (Ex #r. LtkReveal(pkB) @ r)"
+
+lemma auth_B_accepts_from_A:
+  "All pkA pkB t r s d #i.
+      TokenAccepted(pkA, pkB, t, r, s, d) @ i
+    ==> (Ex #j. TokenSent(pkA, pkB, t, r, s, d) @ j & j < i)
+        | (Ex #r. LtkReveal(pkA) @ r & r < i)"
+
+end

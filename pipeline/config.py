@@ -16,7 +16,7 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5")
 
 # Benchmark protocols used as few-shot (description -> SAPIC+) examples in the
 # prompt, ordered simplest first. Names refer to the .txt file stem.
-FEW_SHOT_EXAMPLES = ["Toy", "NSPK", "Denning-Sacco"]
+FEW_SHOT_EXAMPLES = ["Denning-Sacco", "EDHOC", "Otway-Rees","NSSK", "NSPK","KEMTLS","Example","SSH", "Naxos", "Toy","Yahalom","Kao-Chow v1","sigfox","Neuman-Stubblebine","Woo-Lam","SPLICE","LAK06"]
 
 # --- Validation / repair loop -----------------------------------------------
 TAMARIN_BINARY = os.environ.get("TAMARIN_BINARY", "tamarin-prover")

@@ -1,0 +1,136 @@
+theory CertificationPath_Token
+begin
+
+/* Model of a certification-path-based signed-and-encrypted token.
+   Roles:
+     - CA: issues certificates binding an entity's public key to its identity (simplified as signing pk(A)).
+     - A (Sender): generates nonce rA and timestamp tA, packages sgnData (non-confidential)
+                   and encData (confidential, here a fresh secret k) encrypted under B's public key,
+                   and signs the hash of the whole structure. Sends along a certification path (here: CA cert for A).
+     - B (Receiver): verifies the certification path, verifies A's signature, checks intended recipient (B),
+                     decrypts confidential data with its private key, and accepts.
+
+   Cryptography:
+     - Public-key encryption: aenc/adec used for Bp[encData].
+     - Digital signatures: sign/verify; signature is over h(Info) to reflect "Xs[h(Info)]".
+     - Hashing: h/1.
+
+   Security goals:
+     - Executability: There exists a trace where B accepts a token.
+     - Secrecy: The confidential parameter k remains secret unless B's long-term decryption key is revealed.
+     - (Non-injective) Authentication: If B (honestly) accepts a token attributed to an honest A, then either
+       A ran with matching parameters, or A's long-term signing key (or the CA's key) was revealed.
+*/
+
+builtins: asymmetric-encryption, signing, hashing
+
+/* ---------------- Roles ---------------- */
+
+let CA(~skCA) =
+  // Publish CA's public key and offer a replicated certification service.
+  out(pk(~skCA));
+  !(
+    in(<'reqcert', pkA>);
+    out(<'cert', <pkA, sign(pkA, ~skCA)>>)
+  )
+
+let CAReveal(~skCA) =
+  // Optional compromise of the CA key.
+  event LtkRevealCA(pk(~skCA));
+  out(~skCA)
+
+let A(~skA, pkB) =
+  // Request a certificate for A's public key from the CA.
+  out(<'reqcert', pk(~skA)>);
+  in(<'cert', <pkAin, sigCert>>);
+  if pkAin = pk(~skA) then
+    // Prepare signed-and-encrypted token.
+    new rA;                      // non-repeating number (replay/freshness)
+    new tA;                      // timestamp (modeled as fresh)
+    new k;                       // confidential parameter inside encData (e.g., a secret key)
+    let sgnData = 'sgnData' in   // non-confidential parameters (sent in clear, but signed)
+    let C = aenc(k, pkB) in      // encData encrypted under B's public key
+    let info = <tA, rA, pkB, sgnData, C> in
+    let sigA = sign(h(info), ~skA) in
+    event HonestA(pk(~skA));                       // mark A as honest principal for lemmas
+    event RunningA(pk(~skA), pkB, tA, rA, k);      // record the parameters A intends
+    event SecretConf(k);                           // secret intended to remain confidential
+    // Send certification path (here: CA's cert for A) and the signed token.
+    out(<'pathBA', <pk(~skA), sigCert>, <info, sigA>>)
+
+let AReveal(~skA) =
+  // Optional compromise of A's long-term signing key.
+  event LtkRevealA(pk(~skA));
+  out(~skA)
+
+let B(pkCA, ~skB) =
+  // Receive the certification path and A's token.
+  in(msg);
+  let <'pathBA', <pkA, sigCert>, <info, sigA>> = msg in
+  // Verify certification path: certificate binds pkA to A under CA's public key.
+  if verify(sigCert, pkA, pkCA) = true then
+    // Parse info.
+    let <tA, rA, pkB_in, sgnData, C> = info in
+    // Check intended recipient is B by comparing included pkB_in to pk(~skB).
+    if pkB_in = pk(~skB) then
+      // Verify A's signature over the hash of the info.
+      if verify(sigA, h(info), pkA) = true then
+        // Decrypt confidential data with B's private key.
+        let k = adec(C, ~skB) in
+        event AcceptB(pkA, pk(~skB), tA, rA, k)
+
+let BReveal(~skB) =
+  // Optional compromise of B's long-term decryption key.
+  event LtkRevealB(pk(~skB));
+  out(~skB)
+
+/* ---------------- System composition ---------------- */
+
+process:
+  // Single CA instance whose public key is distributed to all parties,
+  // plus replicated sessions of A and B (and possible key-reveal branches).
+  new ~skCA;
+  let pkCA = pk(~skCA) in
+  (
+      !CA(~skCA)
+    | !CAReveal(~skCA)
+    | !(
+         new ~skB; let pkB = pk(~skB) in
+         new ~skA; let pkA = pk(~skA) in
+         // Publish B's public key and mark honest principals for reference.
+         out(pkB);
+         event HonestB(pkB);
+         (
+             !A(~skA, pkB)
+           | !B(pkCA, ~skB)
+           | !AReveal(~skA)
+           | !BReveal(~skB)
+         )
+      )
+  )
+
+/* ---------------- Lemmas ---------------- */
+
+// Executability: there exists a run where B accepts a token.
+lemma executability:
+  exists-trace
+  "Ex pkA pkB t r k #i. AcceptB(pkA, pkB, t, r, k) @ #i"
+
+// Secrecy: the confidential parameter k stays secret unless B's long-term key is revealed beforehand.
+lemma secrecy_confidential_encData:
+  "All pkA pkB t r k #i #j.
+     RunningA(pkA, pkB, t, r, k) @ #i & K(k) @ #j
+     ==> (Ex #rb. LtkRevealB(pkB) @ #rb & #rb < #j)"
+
+// Authentication (non-injective): if B accepts a token attributed to an honest A,
+// then either A ran with matching parameters earlier, or A's key (or the CA key) was revealed beforehand.
+lemma auth_B_accepts_from_honest_A:
+  "All pkA pkB t r k #i #h.
+     AcceptB(pkA, pkB, t, r, k) @ #i & HonestA(pkA) @ #h
+     ==>
+       (Ex #j. RunningA(pkA, pkB, t, r, k) @ #j & #j < #i)
+       | (Ex #ra. LtkRevealA(pkA) @ #ra & #ra < #i)
+       | (Ex pkC #rca. LtkRevealCA(pkC) @ #rca & #rca < #i)
+  "
+
+end

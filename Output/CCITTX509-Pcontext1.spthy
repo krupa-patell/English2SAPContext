@@ -1,0 +1,104 @@
+theory CertificationPath_Token
+begin
+
+/* Roles:
+   - Sender A: creates a token containing timestamp tA, nonce rA, recipient identity B,
+     non-confidential sgnData, and confidential encData encrypted under B's public key.
+     A signs the hash of this info and appends the signature. A includes a certification
+     path B-->A that allows B to obtain A's public key (modeled as a tuple carrying pkA).
+   - Receiver B: obtains pkA from the included certification path, verifies A's signature
+     over the hashed info, checks that B is the intended recipient, and decrypts encData
+     with its private key.
+
+   Primitives:
+   - Public-key encryption: aenc/adec with pk(sk).
+   - Digital signatures: sign/verify over a hash h(info).
+   - Hashing: h.
+
+   Intended goals:
+   - Confidentiality of encData (only B can decrypt), unless B's long-term decryption key is leaked.
+   - Origin authentication and integrity: if B accepts, then (unless A's signing key is leaked)
+     the token must have been sent by A with matching fields.
+*/
+
+builtins: asymmetric-encryption, signing, hashing
+
+functions:
+  id/1        // abstract identity derived from a long-term key (used as a name/tag)
+
+/* A (Sender) constructs and sends: 
+   < ('certpath', idB, idA, pkA),  (<tA, rA, idB, sgnData, aenc(encData, pkB)>, sign(h(...), skA)) >
+*/
+let Sender(~skA, pkB, idA, idB) =
+  new rA;             // fresh anti-replay nonce
+  new tA;             // abstract timestamp
+  new sgnData;        // non-confidential parameters
+  new encData;        // confidential parameters (e.g., keys)
+  let encC = aenc(encData, pkB) in
+  let info = <tA, rA, idB, sgnData, encC> in
+  let H = h(info) in
+  let sigA = sign(H, ~skA) in
+  let certpath_B_to_A = <'certpath', idB, idA, pk(~skA)> in
+  event SentToken(idA, idB, tA, rA, sgnData, encData, encC);
+  out(<certpath_B_to_A, <info, sigA>>);
+  0
+
+/* B (Receiver) verifies and accepts the token, then decrypts encData. */
+let Receiver(~skB, idA, idB) =
+  in(msg);
+  let <path, token> = msg in
+  let <'certpath', =idB, =idA, pkA> = path in          // obtain pkA from certification path B-->A
+  let <info, sigA> = token in
+  let H = h(info) in
+  if verify(sigA, H, pkA) = true then                  // verify A's signature over h(info)
+    let <tA, rA, =idB, sgnData, encC> = info in        // ensure B is intended recipient
+    let m = adec(encC, ~skB) in                        // decrypt confidential parameters
+    event StoreReplay(tA, rA, h(token));               // models storing tA,rA and hashed token for replay checks
+    event BAccept(idA, idB, pk(~skB), tA, rA, sgnData, m);
+    0
+  else
+    0
+
+/* Long-term setup and composition:
+   - Generate B's encryption keypair and A's signing keypair.
+   - Allow potential key compromise via LtkRevealA/LtkRevealB events.
+*/
+process:
+!(
+  new ~skB; out(pk(~skB));                 // B's public key is known (needed by A to encrypt)
+  !(
+    new ~skA; out(pk(~skA));               // A's public key (used by B to verify)
+    (
+        !Sender(~skA, pk(~skB), id(~skA), id(~skB))
+      | !Receiver(~skB, id(~skA), id(~skB))
+      | (event LtkRevealA(pk(~skA)); out(~skA))   // leak A's signing key (models compromise)
+      | (event LtkRevealB(pk(~skB)); out(~skB))   // leak B's decryption key (models compromise)
+    )
+  )
+)
+
+/* Executability: B can accept a valid token. */
+lemma executable:
+  exists-trace
+  "Ex idA idB pkB t r s m #i.
+      BAccept(idA, idB, pkB, t, r, s, m) @ i"
+
+/* Secrecy of encData: if B accepted, the decrypted encData (m) is not learned by the adversary
+   unless B's long-term decryption key was revealed. */
+lemma secrecy_encData:
+  "All idA idB pkB t r s m #i.
+      BAccept(idA, idB, pkB, t, r, s, m) @ i
+      ==> not (Ex #j. K(m) @ #j)
+          | (Ex #r. LtkRevealB(pkB) @ r)
+  "
+
+/* Origin authentication (non-injective): if B accepts, then either A previously sent a matching
+   token, or A's signing key has been revealed (allowing forgeries). */
+lemma origin_authentication:
+  "All idA idB pkB t r s m #i.
+      BAccept(idA, idB, pkB, t, r, s, m) @ i
+      ==> (Ex encC #j. SentToken(idA, idB, t, r, s, m, encC) @ j & j < i)
+          | (Ex pkA #r. LtkRevealA(pkA) @ r)
+  "
+
+end

@@ -1,0 +1,114 @@
+theory Certification_Path_Token
+begin
+
+/* 
+  Protocol goal:
+  - A sends B a signed token containing non-confidential parameters (sgnData) and B-encrypted confidential parameters (encData).
+  - The token includes a certification path (here, a simple CA certificate) allowing B to obtain/verify A's public key.
+  - B verifies the CA certificate, the signature over the hashed info, intended recipient, and decrypts encData.
+  Security goals:
+  - Secrecy: encData remains confidential unless B's long-term private key is compromised.
+  - Authentication (non-injective): If B accepts a token for pkA, then either A sent that token or A's long-term key (or the CA key) was compromised beforehand.
+*/
+
+builtins: asymmetric-encryption, signing, hashing
+
+/* Roles */
+
+let CA(~skCA) =
+  /* Certification Authority: issues certificates binding identities to public keys. */
+  out(pk(~skCA));                       // publish CA's public key
+  !(
+    in(< 'CSR', idA, pkA >);            // receive a certificate signing request (CSR) for identity idA and public key pkA
+    let certMsg = <'cert', idA, pkA> in
+    let certSig = sign(certMsg, ~skCA) in
+    event CertIssued(idA, pkA);
+    out(<certMsg, certSig>)             // output certificate as (message, signature)
+  )
+
+let A(~skA, pkA) =
+  /* Sender A: creates the token and signs it; includes B's public-key-encrypted encData. */
+  in(pkB);                               // obtain B's public key (e.g., from B's publication)
+  out(<'CSR', 'A', pkA>);                // request a certificate for A's public key from the CA
+  in(certPair);                          // obtain (certMsg, certSig) from CA
+  let <certMsg, certSig> = certPair in   // forwarded as the "certification path" B-->A
+  new tA;                                // timestamp
+  new seqA; new rndA;                    // sequential and random parts of rA
+  let rA = <seqA, rndA> in               // rA = <sequential, random>
+  new sgnData;                           // non-confidential parameters
+  new encData;                           // confidential parameters
+  let xenc = aenc(encData, pkB) in       // B's public-key encryption of encData
+  let info = <tA, rA, pkB, sgnData, xenc> in
+  let sigA = sign(h(info), ~skA) in      // signature over the hash of info (Xs[h(Info)])
+  event SecretEnc(pkA, pkB, encData);    // mark secrecy objective for encData
+  event SentToken(pkA, pkB, tA, rA, sgnData);
+  out(< <certMsg, certSig>, info, sigA >)
+
+let B(~skB, pkB, pkCA) =
+  /* Receiver B: verifies CA certificate and A's signature; checks intended recipient; decrypts encData. */
+  out(pkB);                              // publish B's public key
+  in(token);
+  let <<certMsg, certSig>, info, sigA> = token in
+  let <'cert', idA, pkA> = certMsg in
+  if verify(certSig, certMsg, pkCA) = true then      // verify CA's signature on A's certificate
+    let <tA, rA, =pkB, sgnData, xenc> = info in      // check intended recipient is B (by pkB)
+    if verify(sigA, h(info), pkA) = true then        // verify A's signature over the hashed info
+      let encData = adec(xenc, ~skB) in              // decrypt encData with B's private key
+      event AcceptToken(pkA, pkB, tA, rA, sgnData, encData)
+
+
+/* Compromise actions */
+
+let RevealA(~skA) =
+  event LtkReveal('A', pk(~skA));
+  out(~skA)
+
+let RevealB(~skB) =
+  event LtkReveal('B', pk(~skB));
+  out(~skB)
+
+let RevealCA(~skCA) =
+  event CAReveal(pk(~skCA));
+  out(~skCA)
+
+
+/* Protocol composition */
+
+process:
+  new ~skCA; let pkCA = pk(~skCA) in
+  new ~skA;  let pkA  = pk(~skA)  in
+  new ~skB;  let pkB  = pk(~skB)  in
+  (
+      !CA(~skCA)
+    | !A(~skA, pkA)
+    | !B(~skB, pkB, pkCA)
+    | out(pkA)            // optionally publish A's public key (not relied upon for auth)
+    | out(pkB)            // publish B's public key for A to fetch
+    | (RevealA(~skA) | RevealB(~skB) | RevealCA(~skCA))
+  )
+
+
+/* Lemmas */
+
+lemma executability:
+  exists-trace
+  "Ex pkA pkB t r s e #i.
+     AcceptToken(pkA, pkB, t, r, s, e) @ i"
+
+lemma secrecy_encData:
+  "All pkA pkB m #i.
+     SecretEnc(pkA, pkB, m) @ i
+     ==> not (Ex #j. K(m) @ j)
+         | (Ex #r. LtkReveal('B', pkB) @ r)
+  "
+
+lemma authentication_B_noninj:
+  "All pkA pkB t r s e #i.
+     AcceptToken(pkA, pkB, t, r, s, e) @ i
+     ==>
+       (Ex #j. SentToken(pkA, pkB, t, r, s) @ j & j < i)
+       | (Ex #r. LtkReveal('A', pkA) @ r & r < i)
+       | (Ex pkCA #r. CAReveal(pkCA) @ r & r < i)
+  "
+
+end

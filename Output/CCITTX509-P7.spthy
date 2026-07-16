@@ -1,0 +1,113 @@
+theory Signed_Token_With_CertPath_P
+begin
+
+/* Signed token with certification path (Section 7.5-style):
+   A sends to B:  (B -> A),  A{ tA, rA, B, sgnData, Bp[encData] }
+   - A{Info} = <Info, sign(h(Info), A_s)>
+   - Bp[x]   = aenc(x, B_p)
+   We abstract the certification path B -> A as a single opaque certificate cert(pkA),
+   with getcert(cert(pkA)) = pkA. */
+
+builtins: asymmetric-encryption, signing, hashing
+
+functions:
+  cert/1 [private],
+  getcert/1 [destructor]
+
+equations:
+  getcert(cert(x)) = x
+
+/* Role A:
+   - Generates fresh rA (replay-detection nonce), tA (timestamp), sgnData (non-confidential),
+     and encData (confidential).
+   - Forms Info = <tA, rA, B_id, sgnData, aenc(encData, pkB)> where B_id = pk(skB).
+   - Signs h(Info) with skA, sends: <cert(pk(skA)), <Info, sign(h(Info), skA)>>.
+   - Emits events for correlation and secrecy lemmas. */
+
+let A(skA, pkB) =
+  new rA;
+  new tA;
+  new sgnData;
+  new encData;
+  let encPart = aenc(encData, pkB) in
+  let info    = <tA, rA, pkB, sgnData, encPart> in
+  let sigA    = sign(h(info), skA) in
+  let token   = <info, sigA> in
+  let cpath   = cert(pk(skA)) in                 // abstract certification path B -> A
+  event A_Generated(pk(skA), pkB, tA, rA);
+  event RunningA(pk(skA), pkB, <tA, rA, sgnData, encData>);
+  event SecretEncData(pk(skA), pkB, encData);
+  out(<cpath, token>);
+  0
+
+/* Role B:
+   - Receives <cert(pkA), <Info, sigA>>.
+   - Extracts pkA from certificate, verifies signature on h(Info).
+   - Checks intended recipient matches pk(skB).
+   - Decrypts encPart to retrieve encData.
+   - Emits CommitB upon acceptance. */
+
+let B(skB) =
+  in(msg);
+  let <cpath, token> = msg in
+  let pkA = getcert(cpath) in
+  let <info, sigA> = token in
+  if verify(sigA, h(info), pkA) = true then
+    let <tA, rA, intendedB, sgnData, encPart> = info in
+    if intendedB = pk(skB) then
+      let encData = adec(encPart, skB) in
+      event CommitB(pkA, pk(skB), <tA, rA, sgnData, encData>)
+    else
+      0
+  else
+    0
+
+/* Optional key-reveal processes to model compromise.
+   - LtkRevealSig(pkA): leak A's signing key, enabling signature forgery.
+   - LtkRevealEnc(pkB): leak B's decryption key, breaking encData secrecy. */
+
+let RevealSig(skA) =
+  event LtkRevealSig(pk(skA)); out(skA)
+
+let RevealEnc(skB) =
+  event LtkRevealEnc(pk(skB)); out(skB)
+
+/* System composition:
+   - For each replication, fresh long-term keys for A (signing) and B (encryption) are created.
+   - Public keys are published; A also includes a cert containing pkA in its message. */
+
+process:
+!(
+  new skA; out(pk(skA));
+  new skB; out(pk(skB));
+  (
+      !A(skA, pk(skB))
+    | !B(skB)
+    | RevealSig(skA)
+    | RevealEnc(skB)
+  )
+)
+
+/* Lemmas */
+
+// Sanity: there exists a trace where B accepts a token.
+lemma executability:
+  exists-trace
+  "Ex pA pB t r s e #i. CommitB(pA, pB, <t, r, s, e>) @ #i"
+
+// Secrecy of encData: encData remains secret unless B's decryption key is revealed.
+lemma secrecy_encData:
+  "All pA pB m #i.
+      SecretEncData(pA, pB, m) @ #i
+    ==> not (Ex #j. K(m) @ #j)
+        | (Ex #r. LtkRevealEnc(pB) @ #r)"
+
+// Origin authentication (non-injective agreement) at B:
+// If B accepts parameters, then either A previously sent them, or A's signing key was revealed.
+lemma auth_B:
+  "All pA pB t r s e #i.
+      CommitB(pA, pB, <t, r, s, e>) @ #i
+    ==> (Ex #j. RunningA(pA, pB, <t, r, s, e>) @ #j & #j < #i)
+        | (Ex #r. LtkRevealSig(pA) @ #r)"
+
+end
