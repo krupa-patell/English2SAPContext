@@ -1,0 +1,88 @@
+theory RFID_Auth
+begin
+
+/* RFID mutual authentication with desynchronization resilience.
+   Roles: Tag (T) and Reader (R) with a backend lookup abstracted in Reader.
+   Messages:
+     1) R -> T: s
+     2) T -> R: <r1, r2> with r2 = h(<r1, k, s>)
+     3) R -> T: r3 with r3 = h(<r2, k_found, s>), where k_found is either K or Klast
+   Updates:
+     - If DB match on K: Reader sets Klast := K and K := h(K); Tag sets k := h(k) after acceptance.
+     - If DB match on Klast: no Reader DB update; Tag sets k := h(k) after acceptance.
+   Primitive: one-way hash h.
+*/
+
+builtins: hashing
+
+/* Tag holds a long-term secret key ~k. */
+let Tag(~k) =
+    in(s);
+    new r1;
+    let r2 = h(<r1, ~k, s>) in
+    event TagSend(r1, r2, s);
+    out(<r1, r2>);
+    in(r3in);
+    let r3 = h(<r2, ~k, s>) in
+    if r3in = r3 then
+        event TagAccept(~k, s, r1, r2, r3);
+        event TagUpdate(h(~k));
+        0
+    else
+        0
+
+/* Reader holds current key ~k and previous key ~klast for a given Tag entry. */
+let Reader(~k, ~klast) =
+    new s;
+    event ReaderInit(s);
+    out(s);
+    in(msgT);
+    let <r1, r2> = msgT in
+    event ReaderRecv(r1, r2, s);
+    let r2K  = h(<r1, ~k,     s>) in
+    let r2KL = h(<r1, ~klast, s>) in
+    if r2 = r2K then
+        event ReaderFound('K', ~k);
+        let r3 = h(<r2, ~k, s>) in
+        out(r3);
+        event ReaderCommit(~k, s, r1, r2, r3);
+        event DBUpdate('K', ~k, h(~k), ~klast);
+        0
+    else
+        if r2 = r2KL then
+            event ReaderFound('Klast', ~klast);
+            let r3 = h(<r2, ~klast, s>) in
+            out(r3);
+            event ReaderCommit(~klast, s, r1, r2, r3);
+            event DBUpdate('Klast', ~k, ~klast, ~klast);
+            0
+        else
+            event NoMatch(s, r1, r2);
+            0
+
+process:
+    new ~k; new ~klast;
+    event LTK(~k); event DBInit(~klast);
+    ( !Tag(~k) | !Reader(~k, ~klast) )
+
+/* Lemmas */
+
+/* Executability: there exists a trace where Tag accepts and Reader committed to the same values. */
+lemma executability:
+  exists-trace
+  "Ex k s r1 r2 r3 #i #j.
+      TagAccept(k, s, r1, r2, r3) @ #i
+    & ReaderCommit(k, s, r1, r2, r3) @ #j
+    & #j < #i"
+
+/* Authentication: if Tag accepts, then some Reader previously computed the matching r3 with the same inputs. */
+lemma tag_authenticates_reader:
+  "All k s r1 r2 r3 #i.
+      TagAccept(k, s, r1, r2, r3) @ #i
+    ==> (Ex #j. ReaderCommit(k, s, r1, r2, r3) @ #j & #j < #i)"
+
+/* Secrecy: the long-term key k is never learned by the adversary. */
+lemma ltk_secrecy:
+  "All k #i. LTK(k) @ #i ==> not (Ex #j. K(k) @ #j)"
+
+end

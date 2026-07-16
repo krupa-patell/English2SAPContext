@@ -1,0 +1,81 @@
+theory RFID_Auth
+begin
+
+builtins: hashing
+
+functions:
+  xor2/2
+, id/1
+
+let Tag(~k) =
+    in(s);
+    new r1;
+    let x1 = xor2(r1, ~k) in
+    let x2 = xor2(x1, s) in
+    let r2 = h(x2) in
+    event TagSend(id(~k), s, r1, r2);
+    out(<r1, r2>);
+    in(r3);
+    let y1 = xor2(r2, ~k) in
+    let y2 = xor2(y1, s) in
+    let r3calc = h(y2) in
+    if r3 = r3calc then
+      ( event TagAccept(id(~k), s, r1, r2);
+        event TagUpdate(id(~k), h(~k));
+        0
+      )
+    else
+      ( event TagReject(id(~k), s, r1, r2);
+        event TagForceUpdate(id(~k), h(~k));
+        0
+      )
+
+let Reader(~k) =
+    new s;
+    event ReaderStart(id(~k), s);
+    out(s);
+    in(m);
+    let <r1, r2> = m in
+    let x1 = xor2(r1, ~k) in
+    let x2 = xor2(x1, s) in
+    if r2 = h(x2) then
+      (
+        event ReaderAuth(id(~k), s, r1, r2);
+        let y1 = xor2(r2, ~k) in
+        let y2 = xor2(y1, s) in
+        let r3 = h(y2) in
+        event ReaderSendR3(id(~k), r3);
+        out(r3);
+        event ReaderUpdate(id(~k), h(~k));
+        0
+      )
+    else
+      0
+
+process:
+new ~k;
+event SharedKey(id(~k), ~k);
+( !Reader(~k) | !Tag(~k) | (event LtkReveal(id(~k)); out(~k)) )
+
+lemma executability:
+  exists-trace
+  "Ex kid s r1 r2 #i #j.
+       ReaderAuth(kid, s, r1, r2) @ #j
+     & TagAccept(kid, s, r1, r2) @ #i
+     & #j < #i"
+
+lemma key_secrecy:
+  "All kid k #i.
+      SharedKey(kid, k) @ #i
+    ==> (not (Ex #j. K(k) @ #j))
+        | (Ex #r. LtkReveal(kid) @ #r & #r < #i)
+  "
+
+lemma tag_authenticity:
+  "All kid s r1 r2 #i.
+      TagAccept(kid, s, r1, r2) @ #i
+    ==> (Ex #j. ReaderAuth(kid, s, r1, r2) @ #j & #j < #i)
+        | (Ex #r. LtkReveal(kid) @ #r & #r < #i)
+  "
+
+end

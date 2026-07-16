@@ -1,0 +1,125 @@
+theory RFID_Auth_Protocol
+begin
+
+/* Roles:
+   - Tag(T): holds a long-term secret key k, participates in authentication, and updates k.
+   - Reader(R): initiates session with a fresh s, relays Tag's response to Backend, and returns confirmation r3'.
+   - Backend(DB): models the database lookup of k (or Klast) satisfying r2 = h(r1 ⊕ k ⊕ s) and indicates whether an update should occur.
+
+   Messages:
+   1) R -> T: s                      where s <- PRNG
+   2) T -> R: <r1, r2>               where r1 <- PRNG, r2 = h(r1 ⊕ k ⊕ s)
+   3) R -> DB: <'toDB', s, r1, r2>
+      DB -> R: <id(k), kfound, src>  where src ∈ {'K','Klast','none'}, and kfound is the found key if any
+   4) R -> T: r3'                    where r3' = h(r2 ⊕ kfound ⊕ s)
+      T computes r3 = h(r2 ⊕ k ⊕ s) and accepts if r3' = r3, then updates k := h(k).
+
+   Crypto:
+   - Hash function h(·) and a constructor bxor/2 for ⊕ (modeled as a free function, no algebraic equations).
+   - Fresh randomness via new declarations (PRNG abstraction).
+
+   Security goals:
+   - Secrecy of the tag’s long-term key k.
+   - Authentication of Reader to Tag: a Tag only accepts if some Reader sent a matching r3'.
+   - Authentication of Tag to Reader/Backend: a Reader that "finds" a key k for <s,r1,r2> corresponds to some Tag sending that tuple.
+*/
+
+builtins: hashing
+
+/* Abstract XOR and a public identifier function for keys. */
+functions:
+  bxor/2,
+  id/1
+
+/* Tag role: holds a per-instance long-term key ~k. */
+let Tag(~k) =
+  in(s);                                                       // receive challenge s from Reader
+  new r1;                                                      // PRNG: fresh r1
+  let r2 = h(bxor(r1, bxor(~k, s))) in                        // compute r2 = h(r1 ⊕ k ⊕ s)
+  event TagSend(id(~k), s, r1, r2);
+  event SecretKey(id(~k), ~k);                                 // mark k as intended secret
+  out(<r1, r2>);                                               // send response to Reader
+  in(r3p);                                                     // receive Reader's confirmation
+  let r3 = h(bxor(r2, bxor(~k, s))) in                        // compute local confirmation
+  if r3p = r3 then
+    ( event TagAccept(id(~k), s, r1, r2, ~k);
+      event TagUpdate(id(~k), h(~k))                           // on success, Tag would update k := h(k)
+    )
+  else
+    event TagReject(id(~k))
+
+/* Reader role: initiates, relays to Backend, and sends confirmation to Tag. */
+let Reader() =
+  new s;                                                       // PRNG: fresh s
+  event ReaderFreshS(s);
+  out(s);                                                      // send s to some Tag
+  in(<r1, r2>);                                                // receive Tag's response
+  event ReaderRecv(s, r1, r2);
+  out(<'toDB', s, r1, r2>);                                    // forward to Backend
+  in(<idX, kfound, src>);                                      // get matched key (if any) and source flag
+  event ReaderFound(idX, kfound, src, s, r1, r2);
+  let r3p = h(bxor(r2, bxor(kfound, s))) in                    // compute Reader confirmation
+  event ReaderSendR3(idX, r3p, s, r1, r2, kfound);
+  out(r3p)
+
+/* Backend/DB role: tries matching with current K or Klast, and (abstractly) indicates update policy. */
+let Backend(~K, ~Klast) =
+  in(<'toDB', s, r1, r2>);
+  let idX = id(~K) in
+  let candK     = h(bxor(r1, bxor(~K,     s))) in
+  if r2 = candK then
+    ( event DBMatch('K', idX, ~K);
+      // If 'K' matched, in the real system: copy K to Klast and set K := h(K) (abstracted via event here).
+      event DBUpdate(idX, 'K_to_Klast', h(~K), ~K);
+      out(<idX, ~K, 'K'>)
+    )
+  else
+    ( let candKlast = h(bxor(r1, bxor(~Klast, s))) in
+      if r2 = candKlast then
+        ( event DBMatch('Klast', idX, ~Klast);
+          // If 'Klast' matched, no DB update is made.
+          out(<idX, ~Klast, 'Klast'>)
+        )
+      else
+        // No match found: return a placeholder triple (keeps arity consistent).
+        out(<'unknown', 'dummy', 'none'>)
+    )
+
+/* System composition:
+   - For each Tag identity, create a fresh key pair (K, Klast) and run Tag and Backend in parallel (replicated).
+   - Readers run in parallel (replicated). */
+process:
+(
+  !( new ~K; new ~Klast;
+     let idT = id(~K) in
+     event TagKeyInit(idT, ~K);
+     ( !Tag(~K) | !Backend(~K, ~Klast) )
+   )
+  | !Reader()
+)
+
+/* Lemmas */
+
+lemma executability:
+  exists-trace
+  "Ex id s r1 r2 k #i #j.
+     TagSend(id, s, r1, r2) @ #i
+   & TagAccept(id, s, r1, r2, k) @ #j
+   & #i < #j"
+
+lemma secrecy_long_term_k:
+  "All id k #i.
+     SecretKey(id, k) @ #i
+     ==> not (Ex #j. K(k) @ #j)"
+
+lemma auth_reader_to_tag:
+  "All id s r1 r2 k #i.
+     TagAccept(id, s, r1, r2, k) @ #i
+     ==> (Ex r3p #j. ReaderSendR3(id, r3p, s, r1, r2, k) @ #j & #j < #i)"
+
+lemma auth_tag_to_reader_backend:
+  "All id s r1 r2 k src #i.
+     ReaderFound(id, k, src, s, r1, r2) @ #i
+     ==> (Ex #j. TagSend(id, s, r1, r2) @ #j & #j < #i)"
+
+end

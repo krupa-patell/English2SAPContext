@@ -1,0 +1,100 @@
+theory RFID_Reader_Tag_Auth
+begin
+
+builtins: hashing
+
+functions:
+  mix/3      // abstracts r1 ⊕ k ⊕ s (or r2 ⊕ k ⊕ s) as a free constructor
+
+/* 
+  Roles:
+  - Tag(k,id):
+      1) in(s)
+      2) new r1; r2 = h(mix(r1,k,s)); out(<r1,r2>)
+      3) in(r3'); compute r3 = h(mix(r2,k,s)); if r3' = r3 then accept and (logically) update k -> h(k)
+
+  - Reader(k,id):
+      1) new s; out(s)
+      2) in(<r1,r2>); check r2 = h(mix(r1,k,s)); compute r3 = h(mix(r2,k,s)); out(r3)
+
+  Events:
+    LongTermKey(id,k)           -- registration of a tag with key k
+    KeyReveal(id)               -- adversary compromise event for id's long-term key
+    TagSent(id,s,r1,r2)         -- tag sent its first response
+    ReaderCommit(id,s,r1,r2,r3) -- reader verified r2 and sent r3
+    TagAccept(id,s,r1,r2,r3)    -- tag verified r3
+    KeyNext(id,k_next)          -- bookkeeping event for intended next key (logical update)
+*/
+
+let Tag(k, id) =
+  in(s);
+  new r1;
+  let r2 = h(mix(r1, k, s)) in
+  event TagSent(id, s, r1, r2);
+  out(<r1, r2>);
+  in(r3p);
+  let r3 = h(mix(r2, k, s)) in
+  if r3p = r3 then
+    (
+      event TagAccept(id, s, r1, r2, r3);
+      event KeyNext(id, h(k))
+    )
+  else
+    0
+
+let Reader(k, id) =
+  new s;
+  out(s);
+  in(msg);
+  let <r1, r2> = msg in
+  let chk = h(mix(r1, k, s)) in
+  if r2 = chk then
+    let r3 = h(mix(r2, k, s)) in
+    (
+      event ReaderCommit(id, s, r1, r2, r3);
+      out(r3)
+    )
+  else
+    0
+
+/* System setup: For each tag identity 'tid', generate a fresh long-term key ~k
+   and spawn unboundedly many sessions of Tag and Reader sharing that key.
+   A compromise branch allows revealing ~k to the adversary (KeyReveal). */
+process:
+!(
+  new ~k;
+  new tid;
+  event LongTermKey(tid, ~k);
+  ( !Tag(~k, tid) | !Reader(~k, tid) | (event KeyReveal(tid); out(~k)) )
+)
+
+/* Lemmas */
+
+lemma executability:
+  exists-trace
+  "Ex id s r1 r2 r3 #i #j.
+       ReaderCommit(id, s, r1, r2, r3) @ #i
+     & TagAccept(id, s, r1, r2, r3) @ #j
+     & #i < #j"
+
+lemma secrecy_long_term_key:
+  "All id k #i.
+      LongTermKey(id, k) @ #i
+      ==> (not (Ex #j. K(k) @ #j)) | (Ex #r. KeyReveal(id) @ #r)
+  "
+
+lemma tag_authenticates_reader:
+  "All id s r1 r2 r3 #i.
+      TagAccept(id, s, r1, r2, r3) @ #i
+      ==> (Ex #j. ReaderCommit(id, s, r1, r2, r3) @ #j & #j < #i)
+          | (Ex #r. KeyReveal(id) @ #r)
+  "
+
+lemma reader_authenticates_tag:
+  "All id s r1 r2 r3 #i.
+      ReaderCommit(id, s, r1, r2, r3) @ #i
+      ==> (Ex #j. TagSent(id, s, r1, r2) @ #j & #j < #i)
+          | (Ex #r. KeyReveal(id) @ #r)
+  "
+
+end

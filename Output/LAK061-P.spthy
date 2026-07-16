@@ -1,0 +1,94 @@
+theory RFID_Auth
+begin
+
+/* RFID mutual authentication with state update.
+   Roles: Reader R, Tag T.
+   Primitives: hashing (h), PRNG (modeled by new), XOR-like combiner (free function mix/2).
+   Messages:
+     R -> T: s
+     T -> R: <r1, r2> where r2 = h(mix(mix(r1, k), s))
+     R -> T: r3' where r3' = h(mix(mix(r2, k_found), s)), with k_found ∈ {K, Klast}
+   Updates:
+     - If R matched on K, it conceptually updates DB: Klast := K; K := h(K).
+     - If T verifies r3' correctly, it updates k := h(k).
+*/
+
+builtins: hashing
+
+functions:
+  mix/2   // free "XOR-like" combiner used only under h
+
+let Tag(~k) =
+    in(s);
+    new r1;
+    let r2 = h(mix(mix(r1, ~k), s)) in
+    event TagComputed(s, r1, ~k, r2);
+    out(<r1, r2>);
+    in(r3p);
+    let r3 = h(mix(mix(r2, ~k), s)) in
+    if r3p = r3 then
+        event TagAccept(s, r1, r2, ~k);
+        event TagUpdate(h(~k))
+    else
+        event TagReject(s, r1, r2, ~k)
+
+let Reader(~k, ~klast) =
+    new s;
+    event ReaderNonce(s);
+    out(s);
+    in(<r1, r2>);
+    /* Try to find a matching key in DB: first K, then Klast */
+    if r2 = h(mix(mix(r1, ~k), s)) then
+        event ReaderFound('K', s, r1, r2, ~k);
+        let r3p = h(mix(mix(r2, ~k), s)) in
+        event ReaderRespond(s, r1, r2, ~k, r3p);
+        out(r3p);
+        /* Conceptual DB update when matched on K: Klast := K; K := h(K) */
+        event DBUpdate('fromK', ~k, ~klast, h(~k))
+    else
+        if r2 = h(mix(mix(r1, ~klast), s)) then
+            event ReaderFound('Klast', s, r1, r2, ~klast);
+            let r3p = h(mix(mix(r2, ~klast), s)) in
+            event ReaderRespond(s, r1, r2, ~klast, r3p);
+            out(r3p);
+            /* No DB update when matched on Klast */
+            event DBNoUpdate(~k, ~klast)
+        else
+            event ReaderNoMatch(s, r1, r2)
+
+process:
+    new ~k;                // Tag/Reader current shared key K
+    new ~klast;            // Reader's Klast for the Tag
+    event KeySetup(~k, ~klast);
+    ( !Tag(~k) | !Reader(~k, ~klast) )
+
+/* Executability: there exists a run where Tag accepts a Reader response
+   that was sent by the Reader for the same session parameters. */
+lemma executable:
+  exists-trace
+  "Ex s r1 r2 k r3 #i #j.
+      TagAccept(s, r1, r2, k) @ #i
+    & ReaderRespond(s, r1, r2, k, r3) @ #j
+    & #j < #i"
+
+/* Secrecy of the long-term key K (never leaked on the network). */
+lemma secrecy_K:
+  "All k kl #i. KeySetup(k, kl) @ #i ==> not (Ex #j. K(k) @ #j)"
+
+/* Tag authentication to Reader:
+   If the Reader 'found' a key (either K or Klast) for (s, r1, r2),
+   then some Tag previously computed r2 using exactly that key and s, r1. */
+lemma reader_authenticates_tag:
+  "All lbl s r1 r2 k #i.
+     ReaderFound(lbl, s, r1, r2, k) @ #i
+     ==> (Ex #j. TagComputed(s, r1, k, r2) @ #j & #j < #i)"
+
+/* Reader authentication to Tag:
+   If the Tag accepts a response for (s, r1, r2) under its key k,
+   then the Reader previously responded for the same tuple and key. */
+lemma tag_authenticates_reader:
+  "All s r1 r2 k #i.
+     TagAccept(s, r1, r2, k) @ #i
+     ==> (Ex r3 #j. ReaderRespond(s, r1, r2, k, r3) @ #j & #j < #i)"
+
+end

@@ -1,0 +1,103 @@
+theory RFID_Auth_P
+begin
+
+builtins: hashing
+
+/* 
+   Roles:
+    - Tag(k): holds long-term secret k for one run; generates r1, computes r2 = h(<r1,k,s>),
+              verifies r3' = h(<r2,k,s>), and upon success conceptually updates k -> h(k).
+    - Reader(kcurr, klast): generates s; on receiving (r1,r2), finds the tag by checking
+              r2 ?= h(<r1,kcurr,s>) or r2 ?= h(<r1,klast,s>); updates DB if matched on kcurr;
+              sends r3' = h(<r2,kmatch,s>) back to Tag.
+*/
+
+/* Tag role */
+let Tag(k) =
+  in(s);                                 // receive Reader's challenge s
+  event TagKey(k);                       // record the (run's) long-term secret
+  new r1;                                // fresh PRNG output
+  let r2 = h(<r1, k, s>) in              // r2 = h(r1 ⊕ k ⊕ s), modeled as hash over tuple
+  event TagSent(s, r1, r2, k);           // Tag's response constructed
+  out(<r1, r2>);
+  in(r3p);
+  let r3 = h(<r2, k, s>) in              // expected Reader authenticator
+  if r3p = r3 then
+    (
+      event TagAccept(s, r1, r2, k);     // Tag authenticates Reader
+      let k_next = h(k) in               // conceptually update k on success
+      event TagUpdate(k, k_next)
+    )
+  else
+    0
+
+/* Reader role with integrated backend DB state (K,Klast) */
+let Reader(kcurr, klast) =
+  new s;                                   // fresh PRNG output
+  event ReaderStart(s);
+  out(s);
+  in(msg);
+  let <r1, r2> = msg in
+  /* Try current key first */
+  if r2 = h(<r1, kcurr, s>) then
+    (
+      let kmatch = kcurr in
+      event ReaderFound('curr', s, r1, r2, kmatch);
+      let r3p = h(<r2, kmatch, s>) in
+      event ReaderAccept(s, r1, r2, kmatch);    // Reader authenticates Tag using kmatch
+      out(r3p);
+      /* DB update on current-key match: Klast := K; K := h(K) */
+      let k_new   = h(kcurr) in
+      let klast_n = kcurr in
+      event DBUpdate('curr', kcurr, klast, k_new, klast_n)
+    )
+  else
+    /* Fallback to last key */
+    if r2 = h(<r1, klast, s>) then
+      (
+        let kmatch = klast in
+        event ReaderFound('last', s, r1, r2, kmatch);
+        let r3p = h(<r2, kmatch, s>) in
+        event ReaderAccept(s, r1, r2, kmatch);
+        out(r3p);
+        /* No DB update when matched on Klast */
+        event DBNoUpdate('last', kcurr, klast)
+      )
+    else
+      (
+        event ReaderAbort(s, r1, r2); 0
+      )
+
+/* System composition: one tag and one reader share initial DB state (K, Klast) */
+process:
+  new ~K; new ~Klast;
+  event KeyInit(~K, ~Klast);
+  ( !Tag(~K) | !Reader(~K, ~Klast) )
+
+/* Lemmas */
+
+/* Sanity: an honest execution exists where Reader accepts and Tag accepts. */
+lemma executability:
+  exists-trace
+  "Ex s r1 r2 k #i #j.
+      ReaderAccept(s, r1, r2, k) @ #i
+    & TagAccept(s, r1, r2, k) @ #j
+    & #i < #j"
+
+/* Secrecy of the tag's long-term key for this run (no explicit compromise modeled). */
+lemma secrecy_key:
+  "All k #i. TagKey(k) @ #i ==> not (Ex #j. K(k) @ #j)"
+
+/* Reader authenticates the Tag: any ReaderAccept must be preceded by a matching TagSent. */
+lemma auth_reader_over_tag:
+  "All s r1 r2 k #i.
+     ReaderAccept(s, r1, r2, k) @ #i
+     ==> (Ex #j. TagSent(s, r1, r2, k) @ #j & #j < #i)"
+
+/* Tag authenticates the Reader: any TagAccept must be preceded by a matching ReaderAccept. */
+lemma auth_tag_over_reader:
+  "All s r1 r2 k #i.
+     TagAccept(s, r1, r2, k) @ #i
+     ==> (Ex #j. ReaderAccept(s, r1, r2, k) @ #j & #j < #i)"
+
+end

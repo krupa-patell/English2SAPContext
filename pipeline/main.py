@@ -21,6 +21,7 @@ from . import config
 from .extractor import extract_spthy
 from .llm_client import LLMSession
 from .prompt_builder import build_repair_prompt, build_system_prompt, build_user_prompt
+from .selector import select_bits
 from .validator import validate_spthy
 
 
@@ -37,7 +38,12 @@ def run_pipeline(name: str, description: str) -> bool:
         "attempts": [],
     }
 
-    session = LLMSession(build_system_prompt())
+    print(f"[{name}] selecting relevant building blocks with {config.SELECTOR_MODEL}...")
+    bits = select_bits(description)
+    log["selected_bits"] = [f"{bit.phase}/{bit.name}" for bit in bits]
+    print(f"[{name}] selected {len(bits)} blocks: {', '.join(bit.name for bit in bits)}")
+
+    session = LLMSession(build_system_prompt(bits))
     prompt = build_user_prompt(description)
     code = None
     success = False
@@ -121,7 +127,9 @@ def main() -> int:
         return 1
 
     if args.dry_run:
-        print("=== SYSTEM PROMPT ===\n")
+        # Dry-run makes no API calls, so block selection is skipped and the
+        # system prompt shown here embeds the full ProtocolBits library.
+        print("=== SYSTEM PROMPT (full library; real runs select blocks) ===\n")
         print(build_system_prompt())
         for name, description in jobs:
             print(f"\n=== USER PROMPT ({name}) ===\n")

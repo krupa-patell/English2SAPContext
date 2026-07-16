@@ -14,6 +14,9 @@ OUTPUT_DIR = ROOT_DIR / "Output"
 # Reads OPENAI_API_KEY from the environment (standard openai SDK behavior).
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5")
 
+# Model for the cheap building-block selection call (defaults to OPENAI_MODEL).
+SELECTOR_MODEL = os.environ.get("OPENAI_SELECTOR_MODEL", OPENAI_MODEL)
+
 # Benchmark protocols used as few-shot (description -> SAPIC+) examples in the
 # prompt, ordered simplest first. Names refer to the .txt file stem.
 FEW_SHOT_EXAMPLES = ["Denning-Sacco", "EDHOC", "Otway-Rees","NSSK", "NSPK","KEMTLS","Example","SSH", "Naxos", "Toy","Yahalom","Kao-Chow v1","sigfox","Neuman-Stubblebine","Woo-Lam","SPLICE","LAK06"]

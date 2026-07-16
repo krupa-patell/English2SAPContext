@@ -8,7 +8,7 @@ Builds three things:
 """
 
 from . import config
-from .knowledge import load_benchmark_examples, load_protocol_bits
+from .knowledge import ProtocolBit, load_benchmark_examples, load_protocol_bits
 
 SYSTEM_HEADER = """\
 You are an expert in formal verification of security protocols using the
@@ -28,16 +28,16 @@ Requirements for every theory you produce:
 - Output the theory inside a single ```spthy fenced code block and nothing
   else outside it besides brief notes.
 
-Below is a library of reusable SAPIC+ "building blocks" covering common
-protocol phases. Reuse their patterns (adapted to the protocol at hand)
-whenever they fit.
+Below is a library of reusable SAPIC+ "building blocks", pre-selected as
+relevant to the protocol at hand. Reuse their patterns (adapted to the
+protocol) whenever they fit.
 """
 
 
-def _format_bits() -> str:
+def _format_bits(bits: list[ProtocolBit]) -> str:
     parts = []
     current_phase = None
-    for bit in load_protocol_bits():
+    for bit in bits:
         if bit.phase != current_phase:
             parts.append(f"\n## Phase: {bit.phase}\n")
             current_phase = bit.phase
@@ -56,8 +56,15 @@ def _format_examples() -> str:
     return "".join(parts)
 
 
-def build_system_prompt() -> str:
-    return SYSTEM_HEADER + _format_bits() + _format_examples()
+def build_system_prompt(bits: list[ProtocolBit] | None = None) -> str:
+    """Build the system prompt around the given building blocks.
+
+    `bits` is normally the selector's per-protocol pick; None embeds the
+    whole ProtocolBits library (e.g. for --dry-run, which makes no API calls).
+    """
+    if bits is None:
+        bits = load_protocol_bits()
+    return SYSTEM_HEADER + _format_bits(bits) + _format_examples()
 
 
 def build_user_prompt(description: str) -> str:

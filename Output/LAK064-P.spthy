@@ -1,0 +1,89 @@
+theory RFID_Reader_Tag_Auth
+begin
+
+/* RFID mutual authentication with key update.
+
+   Modeling choices:
+   - XOR inside hashes (h(r1 ⊕ k ⊕ s), h(r2 ⊕ k ⊕ s)) is abstracted as hashing tuples:
+       r2 = h(<r1, k, s>) and r3 = h(<r2, k, s>)
+   - The backend database lookup (fields K and Klast) is embedded in the Reader role by
+     checking both the current key K and the previous key Klast, and updating on success.
+   - Roles are single-run (no recursion); updates are recorded via events.
+*/
+
+builtins: hashing
+
+/* Roles */
+
+let Tag(k) =
+  in(s);
+  new r1;
+  let r2 = h(<r1, k, s>) in
+  out(<r1, r2>);
+  in(r3p);
+  let r3 = h(<r2, k, s>) in
+  if r3p = r3 then
+    event TagAccept(k, s, r1);
+    /* Tag would update its key on successful verification */
+    event KeyUpdateTag(k, h(k));
+    0
+  else
+    /* No update on failure */
+    0
+
+let Reader(K, Klast) =
+  new s;
+  out(s);
+  in(msg);
+  let <r1, r2> = msg in
+  if r2 = h(<r1, K, s>) then
+    /* Match with current key: authenticate and update DB */
+    let r3 = h(<r2, K, s>) in
+    event ReaderAccept('curr', K, s, r1);
+    out(r3);
+    event DBUpdate(K, h(K));
+    0
+  else
+    if r2 = h(<r1, Klast, s>) then
+      /* Match with previous key: authenticate but do not update DB */
+      let r3 = h(<r2, Klast, s>) in
+      event ReaderAccept('prev', Klast, s, r1);
+      out(r3);
+      0
+    else
+      /* Authentication failure: notify with an error marker, keep state (conceptually) */
+      out('err');
+      0
+
+/* System composition */
+process:
+  /* Single Tag and its paired Reader with synchronized initial state. */
+  new k0;
+  event TagInit(k0);
+  ( Reader(k0, h(k0)) | Tag(k0) )
+
+/* Lemmas */
+
+/* Executability: there exists a trace where both sides complete a successful run
+   with a match on the current key (and thus both would update). */
+lemma exec_exists:
+  exists-trace
+  "Ex k s r1 #i #j.
+     ReaderAccept('curr', k, s, r1) @ #i
+   & TagAccept(k, s, r1) @ #j
+   & #i < #j"
+
+/* Authentication: if the Tag accepts a run (verifies r3), then some Reader
+   must have accepted earlier with either its current or previous key. */
+lemma tag_authenticates_reader:
+  "All k s r1 #i.
+     TagAccept(k, s, r1) @ #i
+     ==> Ex which #j.
+           ReaderAccept(which, k, s, r1) @ #j
+         & #j < #i"
+
+/* Secrecy of the initial tag key (no explicit compromise modeled). */
+lemma tag_key_secrecy:
+  "All k0 #i. TagInit(k0) @ #i ==> not (Ex #j. K(k0) @ #j)"
+
+end

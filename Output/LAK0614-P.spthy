@@ -1,0 +1,89 @@
+theory RFID_Auth_P
+begin
+
+/* Roles:
+   - Tag T holds a secret key k.
+   - Reader R holds the same per-tag secret key k (lookup in its DB) and runs a challenge-response with T.
+
+   Messages:
+   1) R -> T: s            where s is fresh (PRNG output).
+   2) T -> R: <r1, r2>     where r1 is fresh, r2 = h(r1 ⊕ k ⊕ s).
+   3) R -> T: r3           where r3 = h(r2 ⊕ k ⊕ s).
+
+   Key update:
+   - If R finds k such that h(r1 ⊕ k ⊕ s) = r2, it may update its DB (conceptually K := h(k) if matched in K; else no update).
+   - If T verifies r3 = h(r2 ⊕ k ⊕ s), it updates k := h(k).
+
+   Primitives:
+   - Hashing: h(·)
+   - XOR modeled as a free function bxor(·,·)
+   - PRNG outputs modeled as fresh values via 'new'.
+
+   Intended security goals:
+   - Executability: an honest run exists where Reader and Tag complete.
+   - Secrecy: the long-term key k and its updated value h(k) remain secret from the adversary.
+   - Authentication (non-injective): If Tag accepts (verifies r3), then a matching Reader computation under the same parameters occurred earlier.
+*/
+
+builtins: hashing
+
+functions: bxor/2
+
+let Reader(~k) =
+  new s;                                      // PRNG output
+  event ReaderGenS(s);
+  out(s);
+  in(m);
+  let <r1, r2> = m in
+  let chk = h(bxor(r1, bxor(~k, s))) in       // try DB key ~k
+  if chk = r2 then
+    event ReaderCommit(s, r1, r2, ~k);        // Reader found a matching key for this tag
+    let r3 = h(bxor(r2, bxor(~k, s))) in
+    out(r3);
+    let kNew = h(~k) in
+    event ReaderUpdate(~k, kNew)
+
+let Tag(~k) =
+  in(s);
+  new r1;                                     // PRNG output
+  let r2 = h(bxor(r1, bxor(~k, s))) in
+  event TagSend(s, r1, r2);
+  out(<r1, r2>);
+  in(r3p);
+  let r3 = h(bxor(r2, bxor(~k, s))) in
+  if r3p = r3 then
+    event TagAccept(s, r1, r2, ~k);           // Tag authenticates the Reader's response
+    let kNew = h(~k) in                       // Tag updates its key after successful verification
+    event TagUpdate(~k, kNew);
+    event SecretNewKey(kNew)
+
+process:
+  new ~k;                                     // per-tag secret key
+  event SecretK(~k);                          // mark secrecy of initial key
+  ( !Reader(~k) | !Tag(~k) )
+
+/* Lemmas */
+
+// Honest execution is possible (some run completes)
+lemma executability:
+  exists-trace
+  "Ex s r1 r2 k #i #j.
+      ReaderCommit(s, r1, r2, k) @ #i
+    & TagAccept(s, r1, r2, k) @ #j
+    & #i < #j"
+
+// Secrecy of the initial key
+lemma secrecy_initial_key:
+  "All k #i. SecretK(k) @ #i ==> not (Ex #j. K(k) @ #j)"
+
+// Secrecy of the updated key h(k)
+lemma secrecy_updated_key:
+  "All knew #i. SecretNewKey(knew) @ #i ==> not (Ex #j. K(knew) @ #j)"
+
+// Tag-to-Reader authentication: if Tag accepts, a matching Reader computation happened before
+lemma auth_tag_to_reader:
+  "All s r1 r2 k #i.
+      TagAccept(s, r1, r2, k) @ #i
+    ==> (Ex #j. ReaderCommit(s, r1, r2, k) @ #j & #j < #i)"
+
+end

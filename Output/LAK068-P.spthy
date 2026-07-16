@@ -1,0 +1,105 @@
+theory RFID_Auth_XOR_Hash
+begin
+
+/* Roles:
+   - Tag(id, k): holds a per-tag secret key k. On receiving a fresh challenge s, it generates r1,
+     computes r2 = h(r1 XOR (k XOR s)), sends (r1, r2), then verifies Reader's response r3 and, if correct,
+     updates its key to h(k).
+   - Reader(id, kcur, klast): holds a database record for the Tag with current key K and last key Klast.
+     It sends a fresh challenge s, receives (r1, r2), finds the Tag by checking r2 = h(r1 XOR (k XOR s))
+     against K or Klast, updates DB if matched with K, and replies with r3 = h(r2 XOR (k XOR s)).
+
+   Messages:
+     1) Reader -> Tag:              <'s', s>
+     2) Tag -> Reader:              <'r', r1, r2>, where r2 = h(r1 XOR (k XOR s))
+     3) Reader -> Tag:              <'r3', r3>, where r3 = h(r2 XOR (k_found XOR s))
+
+   Primitives:
+     - Hash function h(·)
+     - XOR via builtin 'xor' (infix operator XOR)
+     - Freshness via new for PRNG outputs s and r1
+
+   Intended security goals:
+     - Secrecy of the tag’s long-term key k, unless explicitly revealed (RevealTag).
+     - Reader authentication of the Tag: when the Reader successfully matches (r1, r2, s) to some id,
+       there must have been a corresponding Tag run with the same values, unless the Tag was revealed.
+     - Executability: existence of a successful run where the Reader commits and the Tag accepts.
+*/
+
+builtins: hashing, xor
+
+let Tag(k, id) =
+  event TagKey(id, k);
+  in(ms);
+  let <'s', s> = ms in
+  new r1;
+  let r2 = h(r1 XOR (k XOR s)) in
+  event RunningTag(id, r1, s, r2);
+  out(<'r', r1, r2>);
+  in(mr3);
+  let <'r3', r3p> = mr3 in
+  let r3 = h(r2 XOR (k XOR s)) in
+  if r3p = r3 then
+    ( event TagAccept(id); event TagUpdate(id, h(k)) )
+  else
+    0
+
+let Reader(kcur, klast, id) =
+  new s;
+  event ReaderStart(id, s);
+  out(<'s', s>);
+  in(resp);
+  let <'r', r1, r2> = resp in
+  event ReaderGot(id, r1, r2, s);
+  if r2 = h(r1 XOR (kcur XOR s)) then
+    (
+      let r3 = h(r2 XOR (kcur XOR s)) in
+      event DBUpdate(id, 'cur');
+      event CommitReader(id, r1, s, r2);
+      out(<'r3', r3>)
+    )
+  else
+    if r2 = h(r1 XOR (klast XOR s)) then
+      (
+        let r3l = h(r2 XOR (klast XOR s)) in
+        event DBNoUpdate(id, 'last');
+        event CommitReader(id, r1, s, r2);
+        out(<'r3', r3l>)
+      )
+    else
+      0
+
+let CorruptTag(k, id) =
+  event RevealTag(id);
+  out(k)
+
+process:
+!(
+  new ~kcur;                      // current key K
+  new ~klast;                     // last key Klast
+  let id = h(<~kcur, ~klast>) in  // abstract identifier derived from keys (not published)
+  ( !Tag(~kcur, id) | !Reader(~kcur, ~klast, id) | CorruptTag(~kcur, id) )
+)
+
+lemma executability:
+  exists-trace
+  "Ex id s r1 r2 #i #j.
+      CommitReader(id, r1, s, r2) @ #i
+    & TagAccept(id) @ #j
+    & #i < #j"
+
+lemma secrecy_tag_key:
+  "not(
+     Ex id k #i #j.
+        TagKey(id, k) @ #i
+      & K(k) @ #j
+      & not (Ex #r. RevealTag(id) @ #r)
+   )"
+
+lemma reader_authenticates_tag:
+  "All id r1 s r2 #i.
+      CommitReader(id, r1, s, r2) @ #i
+    ==>
+      (Ex #j. RunningTag(id, r1, s, r2) @ #j & #j < #i)
+      | (Ex #r. RevealTag(id) @ #r)"
+end

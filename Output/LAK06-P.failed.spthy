@@ -1,0 +1,118 @@
+theory RFID_Auth
+begin
+
+builtins: hashing
+
+functions:
+  bx/2   // abstract XOR; no algebraic equations assumed
+
+/* Roles:
+   - RoleTag(~k,id): holds the current secret key k for identity id.
+   - RoleRDB(~k,~klast,id): Reader+Backend DB that stores the current key K and the last key Klast for id.
+
+   Message flow per session:
+     R -> T: s
+     T -> R: <r1, r2> where r2 = h( r1 ⊕ k ⊕ s )
+     R -> T: r3' where r3' = h( r2 ⊕ k_used ⊕ s ), with k_used ∈ {K, Klast}
+     T: checks r3' = h( r2 ⊕ k ⊕ s ); if equal, updates k := h(k).
+
+   State update policy at RDB:
+     - If match on K, then: send r3' with K; update DB: Klast := K; K := h(K).
+     - If match on Klast, then: send r3' with Klast; no DB update.
+     - Otherwise: send an error marker.
+
+   Security goals:
+     - Secrecy of tag keys across all updates (event SecretK).
+     - Authentication:
+       * If Tag accepts (TagAccept), some RDB previously authenticated the same session (ReaderAuth).
+       * If RDB authenticates (ReaderAuth), then the corresponding TagSend for that session occurred.
+*/
+
+/* Tag role: interactive, recursive across sessions with key updates on successful verification */
+let RoleTag(~k, id) =
+    in(s);
+    new r1;
+    let r2 = h(bx(r1, bx(~k, s))) in
+    event TagSend(id, s, r1, r2);
+    out(<r1, r2>);
+    in(r3p);
+    let r3 = h(bx(r2, bx(~k, s))) in
+    if r3p = r3 then
+        event TagAccept(id, s, r1);
+        let k2 = h(~k) in
+        event SecretK(id, k2);
+        RoleTag(k2, id)
+    else
+        RoleTag(~k, id)
+
+/* Reader+DB role: maintains (K, Klast) state, authenticates and updates DB accordingly, recursive */
+let RoleRDB(~k, ~klast, id) =
+    new s;
+    event ReaderStart(id, s);
+    out(s);
+    in(msg);
+    let <r1, r2> = msg in
+    event ReaderRecv(id, s, r1, r2);
+    let t1 = h(bx(r1, bx(~k, s))) in
+    if r2 = t1 then
+        let r3p = h(bx(r2, bx(~k, s))) in
+        out(r3p);
+        event ReaderAuth(id, s, r1, 'K');
+        let knew = h(~k) in
+        RoleRDB(knew, ~k, id)
+    else
+        let t2 = h(bx(r1, bx(~klast, s))) in
+        if r2 = t2 then
+            let r3p2 = h(bx(r2, bx(~klast, s))) in
+            out(r3p2);
+            event ReaderAuth(id, s, r1, 'Klast');
+            RoleRDB(~k, ~klast, id)
+        else
+            out('err');
+            RoleRDB(~k, ~klast, id)
+
+/* System initialization:
+   - Create arbitrarily many tags, each with fresh id and initial key k.
+   - Initialize DB with K = k and Klast = k for that id.
+*/
+process:
+!(
+  new ~k;
+  new id;
+  event SecretK(id, ~k);
+  let klast = ~k in
+  ( RoleTag(~k, id) | RoleRDB(~k, klast, id) )
+)
+
+/* Lemmas */
+
+/* Executability: there exists a trace where Tag accepts and Reader previously authenticated */
+lemma executability:
+  exists-trace
+  "Ex id s r1 used #i #j.
+      TagAccept(id, s, r1) @ #i
+    & ReaderAuth(id, s, r1, used) @ #j
+    & #j < #i"
+
+/* Secrecy: keys used by tags (across updates) are never learned by the adversary */
+lemma secrecy_k:
+  "All id k #i.
+      SecretK(id, k) @ #i
+    ==> not (Ex #j. K(k) @ #j)"
+
+/* Authentication (Tag -> Reader): If Tag accepts, some Reader previously authenticated same session */
+lemma auth_tag:
+  "All id s r1 #i.
+      TagAccept(id, s, r1) @ #i
+    ==> (Ex used #j. ReaderAuth(id, s, r1, used) @ #j & #j < #i)"
+
+/* Authentication (Reader -> Tag message origin):
+   If Reader authenticates, the corresponding TagSend with same (id,s,r1,r2) occurred earlier. */
+lemma auth_reader_origin:
+  "All id s r1 used #i.
+      ReaderAuth(id, s, r1, used) @ #i
+    ==> (Ex r2 #j #k.
+           ReaderRecv(id, s, r1, r2) @ #j & #j < #i
+         & TagSend(id, s, r1, r2) @ #k & #k < #i)"
+
+end

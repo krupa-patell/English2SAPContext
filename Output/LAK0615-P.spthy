@@ -1,0 +1,96 @@
+theory RFID_Auth
+begin
+
+/* Roles and intuition:
+   - Tag(k): holds a mutable secret key k. On input s from Reader, it generates r1,
+     computes r2 = h(r1 ⊕ k ⊕ s), returns (r1, r2); on receiving r3', it verifies
+     r3' = h(r2 ⊕ k ⊕ s) and then updates its key to h(k).
+   - Reader(K, Klast): holds the database state for a tag: current K and previous Klast.
+     It sends s, receives (r1, r2), tries to identify the tag by checking whether
+     r2 = h(r1 ⊕ K ⊕ s) or r2 = h(r1 ⊕ Klast ⊕ s). If found, it (optionally) updates
+     the DB (K -> h(K) when matching K; no update when matching Klast), computes
+     r3' = h(r2 ⊕ k_found ⊕ s), and sends r3' to the Tag to signal the update.
+   Notes:
+     - We model the backend DB logic inside Reader. This keeps the key k secret from the network.
+     - XOR is modeled as a free function xop/2 (no algebraic properties), sufficient for agreement checks here.
+*/
+
+builtins: hashing
+
+functions: xop/2
+
+let Tag(k) =
+  in(s);                                         // 1) receive s from Reader
+  new r1;                                        // fresh PRNG output
+  let r2 = h(xop(r1, xop(k, s))) in              // r2 = h(r1 ⊕ k ⊕ s)
+  event TagSends(r1, r2, s);
+  out(<r1, r2>);                                 // 2) send (r1, r2) to Reader
+  in(r3p);                                       // 6) receive Reader's confirmation r3'
+  let r3 = h(xop(r2, xop(k, s))) in              // r3 = h(r2 ⊕ k ⊕ s)
+  if r3p = r3 then                               // 7) verify and update
+    let newk = h(k) in
+    event TagAccept(k, newk, s, r1, r2)
+  else
+    event TagReject(s, r1, r2)
+
+let Reader(K, Klast) =
+  new s;                                         // 1) generate fresh s
+  event ReaderSendS(s);
+  out(s);                                        // send s to Tag
+  in(<r1, r2>);                                  // 2) receive (r1, r2)
+  event ReaderRecv(r1, r2, s);
+  // Try match against current K
+  if r2 = h(xop(r1, xop(K, s))) then
+    let oldk = K in
+    let newK = h(K) in                           // 5) DB update when matched on K
+    let r3p = h(xop(r2, xop(oldk, s))) in        // 6) r3' = h(r2 ⊕ k ⊕ s)
+    event ReaderAccept('K', oldk, newK, s, r1, r2);
+    out(r3p);
+  // Try match against Klast (no DB update)
+  if r2 = h(xop(r1, xop(Klast, s))) then
+    let oldk2 = Klast in
+    let r3p2 = h(xop(r2, xop(oldk2, s))) in
+    event ReaderAccept('Klast', oldk2, K, s, r1, r2);
+    out(r3p2)
+
+let Compromise(k) =
+  event LtkReveal(k);
+  out(k)
+
+process:
+  new k0;
+  event KeyInit(k0);
+  ( !Reader(k0, 'initKlast')
+  | !Tag(k0)
+  | Compromise(k0) )
+
+lemma executability:
+  exists-trace
+  "Ex oldk newk s r1 r2 #i #j.
+      ReaderAccept('K', oldk, newk, s, r1, r2) @ #j
+    & TagAccept(oldk, newk, s, r1, r2) @ #i
+    & #j < #i"
+
+lemma secrecy_longterm_k:
+  "All k #i.
+     KeyInit(k) @ #i
+     ==> not (Ex #j. K(k) @ #j)
+         | (Ex #r. LtkReveal(k) @ #r)"
+
+lemma secrecy_updated_k:
+  "All oldk newk s r1 r2 #i.
+      TagAccept(oldk, newk, s, r1, r2) @ #i
+      ==> not (Ex #j. K(newk) @ #j)
+          | (Ex #r. LtkReveal(oldk) @ #r & #r < #i)"
+
+lemma tag_authentication:
+  "All oldk newk s r1 r2 #i.
+      TagAccept(oldk, newk, s, r1, r2) @ #i
+      ==>
+        ( Ex field rnK #j.
+            ReaderAccept(field, oldk, rnK, s, r1, r2) @ #j
+          & #j < #i
+        )
+        | (Ex #r. LtkReveal(oldk) @ #r)"
+
+end

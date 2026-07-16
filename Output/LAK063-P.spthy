@@ -1,0 +1,109 @@
+theory RFID_Reader_Tag_Auth
+begin
+
+/* 
+  Informal model of an RFID mutual authentication/update protocol.
+
+  Roles:
+    - Tag T: holds a long-term symmetric secret k. On each run it receives a nonce s,
+      generates r1, computes r2 = h(r1 ⊕ k ⊕ s), and returns (r1, r2). Then it expects
+      r3' = h(r2 ⊕ k ⊕ s) from the Reader; upon verifying, it would update k := h(k).
+    - Reader R: holds a database record for a tag consisting of (K, Klast).
+      It sends a fresh s, receives (r1, r2), finds which of {K, Klast} matches
+      r2 = h(r1 ⊕ key ⊕ s), optionally updates its DB (if key = K), computes
+      r3' = h(r2 ⊕ key ⊕ s), and sends r3' to the tag.
+
+  Primitives used:
+    - Hashing: h(·)
+    - XOR: modeled as an uninterpreted binary function xplus/2 (no algebraic equations)
+    - Fresh randomness: PRNG via 'new'
+
+  Intended security goals (captured by lemmas below):
+    - Executability: a run exists where both Tag and Reader accept.
+    - Secrecy of the Tag's long-term key k (no adversary knowledge).
+    - Non-injective agreement:
+        * If the Tag accepts, then some Reader run previously accepted on the same transcript.
+        * If the Reader accepts, then some Tag run previously sent the matching (r1, r2).
+*/
+
+builtins: hashing
+
+functions:
+  xplus/2,      // abstracts bitwise XOR used in the spec (kept free here)
+  id/1          // a tag identifier derived from its long-term key (opaque)
+
+let Tag(k) =
+  in(s);                                                     // 1) receive Reader's nonce s
+  new r1;                                                    // 2) Tag fresh r1
+  let r2 = h(xplus(xplus(r1, k), s)) in                      //    r2 = h(r1 ⊕ k ⊕ s)
+  event TagSend(id(k), s, r1, r2);
+  out(<r1, r2>);                                             //    send (r1, r2) to Reader
+  in(r3p);                                                   // 6) expect Reader's response r3' = h(r2 ⊕ k ⊕ s)
+  let r3 = h(xplus(xplus(r2, k), s)) in
+  if r3p = r3 then
+    ( event TagAccept(id(k), s, r1, r2);
+      event TagUpdate(id(k), id(h(k))) )                     // 7) on success, Tag would update k := h(k)
+  else
+    event TagReject(id(k), s, r1, r2)
+
+let Reader(k, k_last) =
+  new s;                                                     // 1) Reader fresh s
+  event ReaderStart(s);
+  out(s);                                                    //    send s to Tag
+  in(<r1, r2>);                                              // 2) receive (r1, r2) from Tag
+  event ReaderRecv(s, r1, r2);
+  let tK  = h(xplus(xplus(r1, k), s)) in
+  if tK = r2 then                                            // 4) match with current K
+    ( event ReaderFound('K', id(k), s, r1, r2);
+      // 5) would update DB: Klast := K; K := h(K)
+      event ReaderUpdate('K_to_Klast', id(k), id(h(k)));
+      let r3p = h(xplus(xplus(r2, k), s)) in                 // 6) r3' with matched key
+      out(r3p);
+      event ReaderAccept(id(k), s, r1, r2) )
+  else
+    ( let tKl = h(xplus(xplus(r1, k_last), s)) in
+      if tKl = r2 then                                       // 4) match with Klast (no DB update)
+        ( event ReaderFound('Klast', id(k_last), s, r1, r2);
+          event ReaderNoUpdate(id(k_last));
+          let r3p = h(xplus(xplus(r2, k_last), s)) in        // 6) r3' with matched key
+          out(r3p);
+          event ReaderAccept(id(k_last), s, r1, r2) )
+      else
+        event ReaderFail(s, r1, r2)
+    )
+
+process:
+  // One tag with long-term key k; reader holds k and a previous key k_last.
+  new ~k_prev;
+  let k_last = h(~k_prev) in
+  new ~k;
+  event LtkTag(~k);                                          // mark creation of Tag's long-term key (for secrecy lemma)
+  ( !Reader(~k, k_last) | !Tag(~k) )
+
+/* Lemmas */
+
+// Sanity: a trace exists where both sides accept in order Reader then Tag
+lemma executability:
+  exists-trace
+  "Ex tid s r1 r2 #i #j.
+      ReaderAccept(tid, s, r1, r2) @ #i
+    & TagAccept(tid, s, r1, r2) @ #j
+    & #i < #j"
+
+// Secrecy of the tag's long-term key
+lemma secrecy_k:
+  "All k #i. LtkTag(k) @ #i ==> not (Ex #j. K(k) @ #j)"
+
+// Reader authentication (of Tag): if Reader accepts, Tag sent matching (r1, r2) before
+lemma auth_reader_noninj:
+  "All tid s r1 r2 #i.
+     ReaderAccept(tid, s, r1, r2) @ #i
+     ==> (Ex #j. TagSend(tid, s, r1, r2) @ #j & #j < #i)"
+
+// Tag authentication (of Reader): if Tag accepts, some Reader accepted the same transcript before
+lemma auth_tag_noninj:
+  "All tid s r1 r2 #i.
+     TagAccept(tid, s, r1, r2) @ #i
+     ==> (Ex #j. ReaderAccept(tid, s, r1, r2) @ #j & #j < #i)"
+
+end
