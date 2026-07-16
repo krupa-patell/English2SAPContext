@@ -1,0 +1,111 @@
+You are an expert in SAPIC+ formal protocol specification. Generate a SAPIC+ theory file that EXACTLY follows the structure, naming, and ordering rules below. Do not deviate, reorder, rename, or add anything not specified. If a detail is not specified, choose the most standard/minimal Tamarin convention and apply it consistently. Do not introduce alternate variable names, helper functions, or comments beyond what is specified. Output ONLY the code block.
+
+THEORY NAME: QUIC_ClientHello
+
+NAMING CONVENTIONS (fixed, do not vary):
+Client private key: sKc
+Client public key: pKc
+Server private key: sKs
+Server public key: pKs
+Generator/base point constant: 'g'
+Destination Connection ID: DCID
+Derived initial secret: initial_secret
+Client initial key: client_initial_key
+Server initial key: server_initial_key
+HKDF salt label: 'quic_v1_initial_salt'
+TLS shared secret: TLS_shared_secret
+Handshake secret (HKDF output combining TLS_shared_secret and the ClientHello/ServerHello hash): handshake_secret
+Client handshake key: client_handshake_key
+Server handshake key: server_handshake_key
+Client label constant: client_label
+Server label constant: server_label
+Client hello message: ClientHello
+Certificate verify: certificate_verify
+Server handshake finished: server_handshake_finished
+Server response message: ServerHello
+Client initial ack packet: client_initial_ack
+Client handshake ack packet: client_handshake_ack
+Server 1-rtt key: server_1rtt_key
+Client 1-rtt key: client_1rtt_key
+Server handshake finished message: server_handshake_finished_msg
+Client handshake confirmation packet: client_handshake_confirmation
+Server handshake confirmation packet: server_handshake_confirmation
+Client data acknowledgment packet: data_ack
+
+STRUCTURE (fixed, do not vary):
+Line 1: theory QUIC_ClientHello
+Line 2: begin
+Blank line.
+builtins: line listing exactly: diffie-hellman, hashing, symmetric-encryption
+Blank line.
+functions: block declaring exactly these symbols, in this order:
+HKDF/2
+KeyExp/0
+client_label/0
+server_label/0
+Blank line.
+A let ClientSetup = ... . process macro, defined BEFORE the process: keyword, that performs these steps in this exact order:
+a. new sKc; — client private key, random integer in [0, 2^256 - 1]
+b. let pKc = 'g'^sKc in — public key via X25519 Diffie-Hellman exponentiation
+c. new DCID; — 8 bytes random Destination Connection ID
+d. let initial_secret = HKDF(DCID, 'quic_v1_initial_salt') in
+e. let client_initial_key = HKDF(initial_secret, client_label) in
+f. let server_initial_key = HKDF(initial_secret, server_label) in
+g. event ClientInitialKeysGenerated(pKc, DCID, client_initial_key, server_initial_key);
+h. let ClientHello = senc(<pKc, DCID>, client_initial_key) in
+i. out(<DCID, ClientHello>) — DCID is sent alongside ClientHello in the clear so the server can receive it and derive matching keys
+j. in(ServerHello); — client receives ServerHello from the network
+k. let <pKs, =DCID> = sdec(ServerHello, server_initial_key) in — client decrypts ServerHello to bind pKs locally before use
+l. let TLS_shared_secret = pKs^sKc in
+m. let handshake_secret = HKDF(TLS_shared_secret, h(<ClientHello, ServerHello>)) in
+n. let client_handshake_key = HKDF(handshake_secret, client_label) in
+o. let server_handshake_key = HKDF(handshake_secret, server_label) in
+p. let client_initial_ack = senc('initial_ack', client_handshake_key) in
+q. let client_handshake_ack = senc('handshake_ack', client_handshake_key) in
+r. out(client_initial_ack)
+s. out(client_handshake_ack)
+t. in(server_handshake_finished_msg); — client receives the server's handshake finished message
+u. let <certificate_verify, server_handshake_finished> = sdec(server_handshake_finished_msg, server_handshake_key) in — client decrypts and binds the server's certificate_verify and server_handshake_finished values using its own server_handshake_key
+v. let client_1rtt_key = HKDF(TLS_shared_secret, h(<ClientHello, ServerHello, server_handshake_key, server_handshake_finished>)) in — client derives its 1-rtt key locally, mirroring the server's derivation
+w. let client_handshake_confirmation = senc('handshake_confirmed', client_1rtt_key) in — the client now sends the client_handshake_confirmation packet, encrypted with the client_1rtt_key
+x. out(client_handshake_confirmation)
+y. let data_ack = senc('data_ack', client_1rtt_key) in — the client now sends the data_ack packet, encrypted with client_1rtt_key
+z. out(data_ack)
+aa. Terminate macro with .
+A let ServerSetup = ... . process macro, defined AFTER ClientSetup and BEFORE the process: keyword, that mirrors the client setup and performs these steps in this exact order:
+a. new sKs; — server private key, random integer in [0, 2^256 - 1]
+b. let pKs = 'g'^sKs in — public key via X25519 Diffie-Hellman exponentiation
+c. in(<DCID, ClientHello>); — server receives DCID and ClientHello from the network, binding DCID for use below
+d. let initial_secret = HKDF(DCID, 'quic_v1_initial_salt') in
+e. let client_initial_key = HKDF(initial_secret, client_label) in
+f. let server_initial_key = HKDF(initial_secret, server_label) in
+g. let <pKc, =DCID> = sdec(ClientHello, client_initial_key) in — server decrypts ClientHello to bind pKc locally before use
+h. let ServerHello = senc(<pKs, DCID>, server_initial_key) in
+i. out(ServerHello)
+j. let TLS_shared_secret = pKc^sKs in
+k. let handshake_secret = HKDF(TLS_shared_secret, h(<ClientHello, ServerHello>)) in
+l. let client_handshake_key = HKDF(handshake_secret, client_label) in
+m. let server_handshake_key = HKDF(handshake_secret, server_label) in — server_handshake_key must be explicitly derived here, before it is referenced in step p
+n. new certificate_verify;
+o. new server_handshake_finished;
+p. let server_1rtt_key = HKDF(TLS_shared_secret, h(<ClientHello, ServerHello, server_handshake_key, server_handshake_finished>)) in — the server now calculates its 1-rtt keys, using TLS_shared_secret and the hash of ClientHello, ServerHello, server_handshake_key, and server_handshake_finished with HKDF to produce server_1rtt_key
+q. let client_1rtt_key = HKDF(TLS_shared_secret, h(<ClientHello, ServerHello, server_handshake_key, server_handshake_finished>)) in — client_1rtt_key is derived the same way, from the same locally-known values, so the server can bind both 1-rtt keys before sending server_handshake_finished_msg
+r. let server_handshake_finished_msg = senc(<certificate_verify, server_handshake_finished>, server_handshake_key) in
+s. out(server_handshake_finished_msg)
+t. let server_handshake_confirmation = senc('handshake_confirmed', server_1rtt_key) in — the server now sends the server_handshake_confirmation packet, encrypted with the server_1rtt_key
+u. out(server_handshake_confirmation)
+v. Terminate macro with .
+process: section containing exactly: ! ClientSetup | ! ServerSetup
+Final line: end
+
+FORMATTING RULES:
+Use 4-space indentation throughout, no tabs.
+One statement per line.
+No inline comments inside the functions/builtins blocks.
+Use //-style comments only directly above the ClientSetup macro and directly above the ServerSetup macro, each describing the respective macro in exactly 5 lines or fewer.
+No lemmas unless explicitly requested in a follow-up.
+Variable names, function names, and event names must match this spec verbatim — do not rename, reorder, or pluralize anything.
+DCID must be received by the server via an explicit in(...) action before any use; do not reuse DCID across processes without this binding step.
+Every variable used in a let binding or senc/sdec call (including pKs and pKc across process boundaries, and server_handshake_key/client_handshake_key in both macros) must be explicitly derived or decrypted into scope in a dedicated step before its first use — no cross-process variable leakage and no referencing a name in a later step without an earlier binding step for it.
+Do not add extra functions, events, or processes not listed above.
+Return the result in a single fenced code block with no text before or after it.

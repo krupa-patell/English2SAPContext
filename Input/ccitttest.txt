@@ -1,0 +1,31 @@
+Write a SAPIC+ (Tamarin/ProVerif-style applied-pi) process definition for a responder role named Bob, taking three parameters: skB (Bob's private key), pkB (Bob's public key), and pkA (Alice's public key). Alice and Bob’s role are defined separately below. Please stitch them together.
+
+Alice:
+The process takes three parameters: Alice's private signing key (skA), Alice's public key (pkA), and Bob's public key (pkB).
+Have the process do the following, in order:
+Emit an event Role_A recording Alice's private key, to mark that this is role A.
+Generate four fresh values: ta, na, xa, and Ya.
+Build a message tuple m containing, in order: ta, na, Bob's public key pkB, xa, and Ya asymmetrically encrypted under Bob's public key (aenc(Ya, pkB)).
+Compute a hash ha of m using h.
+Build the outgoing message msg as a tuple of three elements: Alice's public key pkA, the tuple m, and a signature over ha made with Alice's private key (sign(ha, skA)).
+Emit an authentication event Running_A with arguments pkA, pkB, and the tuple <'A', 'B', xa, Ya> (Alice starting a run intended for Bob, agreeing on xa and Ya).
+Emit a secrecy event SecretA claiming Ya is secret, with arguments pkA, pkB, Ya.
+Emit an output event Out_A_1 recording the message being sent.
+Send msg out on the public channel.
+Use <...> for tuples, new for fresh values, let ... in for bindings, event for events, and out(...) to send.
+Do not include the server side implementation. Restrict the code only to the client implementation
+
+Bob:
+The process takes three parameters: Bob's private key (skB), Bob's public key (pkB), and Alice's public key (pkA).
+Have the process do the following, in order:
+Emit an event Role_B recording Bob's private key, to mark that this is role B.
+Receive a message from the public channel and bind it to cipher.
+Pattern-match cipher as a 3-tuple <pkA, m, sig>, where the first component must equal the already-known pkA (use the =pkA equality-check pattern, not a fresh binding). m is the message body and sig is a signature.
+Pattern-match m as a 5-tuple <ta, na, pkB, xa, cipher>, where the third component must equal the already-known pkB(again =pkB). The last component is the ciphertext — note the original code rebinds the name cipher here, shadowing the earlier one.
+Decrypt that ciphertext with Bob's private key to recover Ya: let Ya = adec(cipher, skB).
+Compute the hash ha of m using h.
+Check that the signature verifies: if verify(sig, ha, pkA) = true then.
+If verification succeeds, emit two events (and nothing else — there is no else-branch):
+Commit_B(pkA, pkB, <'A','B', xa, Ya>) — Bob commits to a run with Alice, agreeing on xa and Ya.
+Secret(pkA, pkB, Ya) — a secrecy claim on Ya.
+Use <...> for tuples, let <pattern> = term in for destructuring with =x for equality checks against known values, event for events, and in(...) to receive.

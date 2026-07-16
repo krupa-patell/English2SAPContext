@@ -1,0 +1,116 @@
+theory RFID_Auth
+begin
+
+/* 
+  RFID authentication protocol with two main components: Reader and Tag.
+  - Messages:
+      1) R -> T: s                       (fresh challenge)
+      2) T -> R: <r1, r2>                (r2 = h(xor3(r1, k, s)))
+      3) R -> T: r3'                     (r3' = h(xor3(r2, k_found, s)))
+     T checks r3' = h(xor3(r2, k, s)) and updates k := h(k) on success.
+     R "finds ID" and "updates DB" internally: if match on current k, it logs DBUpdate; 
+     if match on last key klast, it logs DBNoUpdate.
+
+  - Crypto primitives used:
+      * hashing (h/1)
+      * xor as an abstract mixing function modeled as a free function xor3/3
+
+  - Intended security goals:
+      * Executability: a successful run exists.
+      * Secrecy: the long-term tag key k remains secret unless explicitly revealed.
+      * Authentication (non-injective):
+          - ReaderCommit implies a prior TagRunning with matching values, unless key revealed.
+          - TagAccept implies a prior ReaderCommit with matching values, unless key revealed.
+*/
+
+builtins: hashing
+
+functions:
+  xor3/3     // abstract 3-ary XOR combiner used only under the hash
+
+let Tag(id, k) =
+  in(s);                                               // receive challenge
+  new r1;                                              // PRNG output
+  let r2 = h(xor3(r1, k, s)) in                        // r2 = h(r1 ⊕ k ⊕ s)
+  event TagRunning(id, s, r1, r2, k);                  // Tag's contribution
+  out(<r1, r2>);                                       // send response pair
+  in(r3);                                              // receive Reader's confirmation
+  let expectedR3 = h(xor3(r2, k, s)) in
+  if r3 = expectedR3 then
+    event TagAccept(id, s, r1, r2, k);                 // Tag authenticates Reader
+    event TagKeyUpdate(id, k, h(k))                    // on success, Tag updates k := h(k)
+  else
+    event TagReject(id, s, r1, r2)                     // mismatch (no update here)
+
+
+let Reader(id, kcur, klast) =
+  new s;                                               // PRNG output
+  event ReaderStart(id, s);
+  out(s);                                              // send challenge to Tag
+  in(<r1, r2>);                                        // receive Tag response
+  event ReaderGot(id, s, r1, r2);
+  if r2 = h(xor3(r1, kcur, s)) then                    // match current key
+    let usedk = kcur in
+    event FoundKey(id, 'cur', usedk);                  // ID/key found via current K
+    let r3p = h(xor3(r2, usedk, s)) in                 // r3' = h(r2 ⊕ k ⊕ s)
+    event ReaderCommit(id, s, r1, r2, usedk);          // Reader authenticates Tag
+    out(r3p);
+    event DBUpdate(id, kcur, h(kcur))                  // DB: Klast := K; K := h(K)
+  else
+    if r2 = h(xor3(r1, klast, s)) then                 // match last key
+      let usedk = klast in
+      event FoundKey(id, 'last', usedk);               // ID/key found via Klast
+      let r3p = h(xor3(r2, usedk, s)) in
+      event ReaderCommit(id, s, r1, r2, usedk);        // Reader authenticates Tag
+      out(r3p);
+      event DBNoUpdate(id, klast)                      // DB: no update if matched last
+    else
+      event NoMatch(id, s, r1, r2)                     // no key matched; abort
+
+
+process:
+  // One tag identity with a long-term secret key ~k.
+  // Reader holds both current key (~k) and a placeholder last key 'none'.
+  new ~k;
+  let id = 'tag1' in
+  event TagInit(id, ~k);
+  (
+      !Tag(id, ~k)
+    | !Reader(id, ~k, 'none')
+    // Optional compromise branch; may occur in some traces.
+    | (event KeyReveal(id, ~k); out(~k))
+  )
+
+
+/* Lemmas */
+
+// Executability: there exists a trace where Reader commits and Tag accepts, in order.
+lemma executable:
+  exists-trace
+  "Ex id s r1 r2 k #i #j.
+      ReaderCommit(id, s, r1, r2, k) @ #i
+    & TagAccept(id, s, r1, r2, k) @ #j
+    & #i < #j
+    & not(Ex #r. KeyReveal(id, k) @ #r)"
+
+// Secrecy of the tag's long-term key unless explicitly revealed.
+lemma tag_key_secrecy:
+  "All id k #i.
+      TagInit(id, k) @ #i
+      ==> (not (Ex #j. K(k) @ #j)) | (Ex #r. KeyReveal(id, k) @ #r)"
+
+// Reader authenticates Tag (non-injective agreement), barring key compromise.
+lemma reader_authenticates_tag_NI:
+  "All id s r1 r2 k #i.
+      ReaderCommit(id, s, r1, r2, k) @ #i
+      ==> (Ex #j. TagRunning(id, s, r1, r2, k) @ #j & #j < #i)
+          | (Ex #r. KeyReveal(id, k) @ #r & #r < #i)"
+
+// Tag authenticates Reader (non-injective agreement), barring key compromise.
+lemma tag_authenticates_reader_NI:
+  "All id s r1 r2 k #i.
+      TagAccept(id, s, r1, r2, k) @ #i
+      ==> (Ex #j. ReaderCommit(id, s, r1, r2, k) @ #j & #j < #i)
+          | (Ex #r. KeyReveal(id, k) @ #r & #r < #i)"
+
+end

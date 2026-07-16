@@ -1,0 +1,119 @@
+theory RFID_Auth_Protocol_P
+begin
+
+builtins: hashing
+
+/* 
+  Roles:
+    - Tag(tid, ~k): stores evolving secret key k; computes r2 = h(<r1, k, s>) and later verifies r3.
+    - Reader(~Kcur, ~Klast, tid): generates challenge s; identifies key by checking r2 against h(<r1, Kcur, s>) or h(<r1, Klast, s>); updates DB when matched on Kcur; sends r3 = h(<r2, k, s>).
+    - Compromise(tid, k): optional leakage of the tag's secret key.
+
+  Messages:
+    1) Reader -> Tag: s
+    2) Tag -> Reader: <r1, r2> where r2 = h(<r1, k, s>)
+    3) Reader -> Tag: r3' where r3' = h(<r2, k, s>)
+    4) Tag checks r3' = r3, and on success would update k := h(k) (modeled via events).
+
+  Primitives:
+    - Hashing h/1
+    - Concatenation modeled by pairing <...>
+  
+  Intended security goals:
+    - Secrecy of the tag's secret key k unless an explicit KeyReveal(tid) occurs.
+    - Reader authenticates the Tag: if Reader commits on (tid,s,r1,r2), then a matching Tag run existed (or key was revealed).
+    - Tag authenticates the Reader: if Tag commits on (tid,s,r1,r2), then a matching Reader commit existed (or key was revealed).
+*/
+
+let Tag(~k, tid) =
+  in(s);
+  new r1;
+  let r2 = h(<r1, ~k, s>) in
+  event TagUsesKey(tid, ~k);
+  event TagRunning(tid, s, r1, r2);
+  out(<r1, r2>);
+  in(r3p);
+  let r3 = h(<r2, ~k, s>) in
+  if r3p = r3 then
+    event TagCommit(tid, s, r1, r2);
+    event TagUpdatePlanned(tid, h(~k))
+  else
+    event TagReject(tid, s, r1, r2)
+
+
+let Reader(~Kcur, ~Klast, tid) =
+  new s;
+  event ReaderNewS(tid, s);
+  out(s);
+  in(<r1, r2>);
+  event ReaderRecv(tid, s, r1, r2);
+  if r2 = h(<r1, ~Kcur, s>) then
+    event ReaderFoundKey(tid, 'cur');
+    let r3p = h(<r2, ~Kcur, s>) in
+    out(r3p);
+    event ReaderCommit(tid, s, r1, r2);
+    event ReaderUpdateDB(tid, <'Klast', ~Kcur, 'Kcur', h(~Kcur)>)
+  else
+    if r2 = h(<r1, ~Klast, s>) then
+      event ReaderFoundKey(tid, 'last');
+      let r3p = h(<r2, ~Klast, s>) in
+      out(r3p);
+      event ReaderCommit(tid, s, r1, r2)
+    else
+      event ReaderNoMatch(tid, s, r1, r2);
+      out('err')
+
+
+let Compromise(tid, k) =
+  event KeyReveal(tid);
+  out(k)
+
+
+process:
+new ~k0;
+let tid = 'T' in
+(
+  !Tag(~k0, tid)
+| !Reader(~k0, 'init', tid)
+| ( Compromise(tid, ~k0) )
+)
+
+
+/* Executability: a successful run where both sides commit */
+lemma executability:
+  exists-trace
+  "Ex tid s r1 r2 #i #j.
+      ReaderCommit(tid, s, r1, r2) @ #i
+    & TagCommit(tid, s, r1, r2) @ #j
+    & #i < #j
+    & not (Ex #r. KeyReveal(tid) @ #r)
+  "
+
+
+/* Secrecy of the tag's secret key unless it is explicitly revealed */
+lemma key_secrecy:
+  "All tid k #i.
+      TagUsesKey(tid, k) @ #i
+    ==> not (Ex #j. K(k) @ #j)
+        | (Ex #r. KeyReveal(tid) @ #r)
+  "
+
+
+/* Reader authenticates Tag: a Reader commit implies a prior Tag run unless key was revealed */
+lemma auth_Tag_to_Reader:
+  "All tid s r1 r2 #i.
+      ReaderCommit(tid, s, r1, r2) @ #i
+    ==> (Ex #j. TagRunning(tid, s, r1, r2) @ #j & #j < #i)
+        | (Ex #r. KeyReveal(tid) @ #r)
+  "
+
+
+/* Tag authenticates Reader: a Tag commit implies a prior Reader commit unless key was revealed */
+lemma auth_Reader_to_Tag:
+  "All tid s r1 r2 #i.
+      TagCommit(tid, s, r1, r2) @ #i
+    ==> (Ex #j. ReaderCommit(tid, s, r1, r2) @ #j & #j < #i)
+        | (Ex #r. KeyReveal(tid) @ #r)
+  "
+
+end

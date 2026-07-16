@@ -1,0 +1,118 @@
+theory RFID_Auth_Protocol
+begin
+
+builtins: hashing
+
+/* Roles:
+   - Tag(tid, ~k): holds per-tag identifier tid and secret ~k; produces r1, r2 and checks r3.
+   - Reader(): initiates with fresh s, relays query to backend, forwards r3 to tag.
+   - DBRecord(tid, ~k, ~klast): per-tag backend record storing current key ~k and last key ~klast;
+     finds the right tag by checking r2 = h(<r1, key, s>) for key in {~k, ~klast}; computes r3.
+*/
+
+/* Tag role */
+let Tag(tid, ~k) =
+  in(<'s', s>);                               // step 1: receive fresh s from Reader
+  event TagRecvS(tid, s);
+  new r1;                                     // step 2: tag fresh r1
+  let r2 = h(<r1, ~k, s>) in                  // r2 = h(r1 ⊕ k ⊕ s) abstracted as h(<r1,k,s>)
+  event TagSendResp(tid, s, r1, r2);
+  out(<'resp', r1, r2>);                      // send r1, r2 to Reader
+  in(<'r3', r3in>);                           // step 6: receive r3 from Reader
+  let r3 = h(<r2, ~k, s>) in                  // r3 = h(r2 ⊕ k ⊕ s) abstracted as h(<r2,k,s>)
+  if r3in = r3 then
+    ( event TagAccept(tid, s, r1, r2)         // step 7: accept; (update k to h(k) conceptually)
+      ; event TagWouldUpdate(tid, h(~k))      // model update as event (no state mutation)
+    )
+  else
+    0
+
+/* Reader role */
+let Reader() =
+  new s;                                      // step 1: Reader fresh pseudorandom s
+  event ReaderFreshS(s);
+  out(<'s', s>);                              // send s to Tag
+  in(<'resp', r1, r2>);                       // step 2: get r1, r2 from Tag
+  event ReaderGotResp(s, r1, r2);
+  out(<'query', s, r1, r2>);                  // step 3: forward to backend (DB)
+  in(<'answer', tid, r3>);                    // get backend's response after identification
+  event ReaderForward(tid, s, r1, r2, r3);
+  out(<'r3', r3>)                             // step 6: send r3 to Tag
+  // 0 implied
+
+/* Per-tag backend record (database) */
+let DBRecord(tid, ~k, ~klast) =
+  in(<'query', s, r1, r2>);
+  let c1 = h(<r1, ~k, s>) in
+  if r2 = c1 then
+    ( event DBFound(tid, 'K');                // matched current key K
+      // step 5 update when matched in K: Klast := K and K := h(K)
+      event DBUpdateK(tid, h(~k), ~k);
+      let r3 = h(<r2, ~k, s>) in              // step 6: compute r3 with found key
+      out(<'answer', tid, r3>)
+    )
+  else
+    ( let c2 = h(<r1, ~klast, s>) in
+      if r2 = c2 then
+        ( event DBFound(tid, 'Klast');        // matched last key Klast (no DB update)
+          event DBNoUpdate(tid);
+          let r3 = h(<r2, ~klast, s>) in
+          out(<'answer', tid, r3>)
+        )
+      else
+        0
+    )
+
+/* Optional compromise of a tag's long-term key. */
+let CompromiseTag(~k, tid) =
+  event Reveal(tid); out(~k)
+
+/* System composition:
+   - Many Readers.
+   - For each tag, create a Tag and a matching DBRecord sharing the same (~k, ~klast, tid).
+     We model initial Klast as an independent secret ~klast (could be an older value).
+*/
+process:
+(
+  !Reader()
+|
+  !(
+    new ~k; new ~klast; new tid;
+    event LTKey(tid, ~k);
+    ( !Tag(tid, ~k) | !DBRecord(tid, ~k, ~klast) | ( CompromiseTag(~k, tid) ) )
+  )
+)
+
+/* Lemmas */
+
+/* Executability: there exists a trace with a successful tag acceptance
+   and a prior backend identification (either via K or Klast). */
+lemma executable:
+  exists-trace
+  "Ex tid s r1 r2 #i #j.
+       TagAccept(tid, s, r1, r2) @ #i
+     & ( DBFound(tid, 'K') @ #j | DBFound(tid, 'Klast') @ #j )
+     & #j < #i"
+
+/* Secrecy: the tag's long-term key ~k remains secret unless explicitly revealed. */
+lemma secrecy_k:
+  "All tid k #i.
+     LTKey(tid, k) @ #i
+     ==> (not (Ex #j. K(k) @ #j)) | (Ex #r. Reveal(tid) @ #r)"
+
+/* Authentication (Tag -> Backend): if a Tag accepts (verifies r3),
+   then some backend record must have identified it earlier, unless the tag was compromised. */
+lemma auth_tag_backend:
+  "All tid s r1 r2 #i.
+     TagAccept(tid, s, r1, r2) @ #i
+     ==>
+       (Ex src #j. DBFound(tid, src) @ #j & #j < #i)
+       | (Ex #r. Reveal(tid) @ #r)"
+
+/* Reader's forwarding is backed by a prior backend identification. */
+lemma reader_uses_backend:
+  "All tid s r1 r2 r3 #i.
+     ReaderForward(tid, s, r1, r2, r3) @ #i
+     ==> Ex src #j. DBFound(tid, src) @ #j & #j < #i"
+
+end

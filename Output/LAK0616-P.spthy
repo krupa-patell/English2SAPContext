@@ -1,0 +1,91 @@
+theory RFID_HashXOR_Auth
+begin
+
+builtins: hashing
+
+functions:
+  bxor/2
+
+let Tag(~k, idT) =
+  in(s);
+  new r1;
+  let mix1 = bxor(bxor(r1, ~k), s) in
+  let r2  = h(mix1) in
+  event TagSend(idT, s, r1, r2);
+  out(<r1, r2>);
+  in(r3p);
+  let mix2 = bxor(bxor(r2, ~k), s) in
+  let r3  = h(mix2) in
+  if r3p = r3 then
+    event TagAccept(idT, ~k, s, r1, r2);
+    let newk = h(~k) in
+    event TagUpdate(idT, newk);
+    0
+  else
+    event TagReject(idT, s, r1, r2, r3p);
+    0
+
+let Reader(~K, Klast, idT) =
+  new s;
+  event ReaderStart(idT, s);
+  out(s);
+  in(<r1, r2>);
+  event ReaderRecv(idT, s, r1, r2);
+  let calcK     = h(bxor(bxor(r1, ~K),    s)) in
+  let calcKlast = h(bxor(bxor(r1, Klast), s)) in
+  if r2 = calcK then
+    event BackendMatch(idT, 'K');
+    let r3p = h(bxor(bxor(r2, ~K), s)) in
+    event ReaderAuth(idT, s, r1, r2, ~K);
+    out(r3p);
+    event ReaderUpdate(idT, h(~K), ~K);
+    0
+  else
+    if r2 = calcKlast then
+      event BackendMatch(idT, 'Klast');
+      let r3p2 = h(bxor(bxor(r2, Klast), s)) in
+      event ReaderAuth(idT, s, r1, r2, Klast);
+      out(r3p2);
+      0
+    else
+      event BackendFail(idT, s, r1, r2);
+      let r3pfail = h(bxor(bxor(r2, ~K), s)) in
+      out(r3pfail);
+      0
+
+let Compromise(k, idT) =
+  event LtkReveal(idT);
+  out(k)
+
+process:
+  new ~k;
+  let idT = 'Tag1' in
+  event TagInit(idT, ~k);
+  (
+    !Tag(~k, idT)
+  | !Reader(~k, 'zero', idT)
+  | ( Compromise(~k, idT) )
+  )
+
+lemma executability:
+  exists-trace
+  "Ex id s r1 r2 k #i #j.
+      TagAccept(id, k, s, r1, r2) @ #i
+    & ReaderAuth(id, s, r1, r2, k) @ #j
+    & #j < #i"
+
+lemma long_term_key_secrecy:
+  "All id k #i.
+      TagInit(id, k) @ #i
+      ==>
+      ( not (Ex #j. K(k) @ #j) )
+      | (Ex #r. LtkReveal(id) @ #r)"
+
+lemma tag_authentication:
+  "All id s r1 r2 k #i.
+      TagAccept(id, k, s, r1, r2) @ #i
+      ==>
+      ( Ex #j. ReaderAuth(id, s, r1, r2, k) @ #j & #j < #i )
+      | ( Ex #r. LtkReveal(id) @ #r & #r < #i )"
+
+end

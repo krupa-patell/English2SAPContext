@@ -1,0 +1,101 @@
+theory NSPK_SAPIC
+begin
+
+/* Needham-Schroeder Public-Key (NSPK) protocol in SAPIC+
+   Roles: Initiator (A) and Responder (B)
+   Messages:
+     1) A -> B: {A, Na}_pub(B)
+     2) B -> A: {Na, Nb}_pub(A)
+     3) A -> B: {Nb}_pub(B)
+   Primitives: public-key encryption (asymmetric-encryption)
+   Intended goals:
+     - Executability: both sides can complete a run.
+     - Secrecy: nonces Na and Nb should remain secret unless a long-term key is revealed.
+     - (Intended) authentication: non-injective agreement between A and B on Na,Nb.
+       Note: Classic NSPK is known to be vulnerable (Lowe attack); the authentication lemmas
+       below capture the intended property and are conditioned on long-term key compromise.
+*/
+
+builtins: asymmetric-encryption
+
+/* Initiator A with long-term secret ltKA and peer's public key pKB */
+let Initiator(ltKA, pKB) =
+  new Na;
+  event I_Start(pk(ltKA), pKB, Na);
+  event I_Running(pk(ltKA), pKB, Na);
+  out(aenc(<pk(ltKA), Na>, pKB));
+  in(c2);
+  let < =Na, Nb > = adec(c2, ltKA) in
+  event I_Recv(pk(ltKA), pKB, Na, Nb);
+  out(aenc(Nb, pKB));
+  event Secret(pk(ltKA), pKB, Na);
+  event Secret(pk(ltKA), pKB, Nb);
+  event I_Commit(pk(ltKA), pKB, Na, Nb)
+
+/* Responder B with long-term secret ltKB and peer's public key pKA */
+let Responder(ltKB, pKA) =
+  in(c1);
+  let < =pKA, Na > = adec(c1, ltKB) in
+  event R_RecvInit(pKA, pk(ltKB), Na);
+  new Nb;
+  event R_Running(pk(ltKB), pKA, Na, Nb);
+  out(aenc(<Na, Nb>, pKA));
+  in(c3);
+  let =Nb = adec(c3, ltKB) in
+  event Secret(pKA, pk(ltKB), Na);
+  event Secret(pKA, pk(ltKB), Nb);
+  event R_Commit(pk(ltKB), pKA, Na, Nb)
+
+/* Long-term key reveal (compromise) */
+let LtkReveal(sk) =
+  event LtkReveal(pk(sk));
+  out(sk)
+
+process:
+!(
+  new skA; out(pk(skA));
+  !(
+    new skB; out(pk(skB));
+    (
+        !Initiator(skA, pk(skB))
+      | !Responder(skB, pk(skA))
+      | LtkReveal(skA)
+      | LtkReveal(skB)
+    )
+  )
+)
+
+/* Lemmas */
+
+/* Executability: there exists a trace where both parties commit to a session */
+lemma executability:
+  exists-trace
+  "Ex Apk Bpk Na Nb #i #j.
+      I_Commit(Apk, Bpk, Na, Nb) @ #i
+    & R_Commit(Bpk, Apk, Na, Nb) @ #j"
+
+/* Secrecy of nonces (relative to long-term key compromise) */
+lemma nonce_secrecy:
+  "All A B s #i.
+     Secret(A, B, s) @ #i
+     ==> (not (Ex #k. K(s) @ #k))
+       | (Ex #r. LtkReveal(A) @ #r)
+       | (Ex #r. LtkReveal(B) @ #r)"
+
+/* Intended (non-injective) agreement for Initiator */
+lemma auth_initiator_ni:
+  "All Apk Bpk Na Nb #i.
+      I_Commit(Apk, Bpk, Na, Nb) @ #i
+    ==> (Ex #j. R_Running(Bpk, Apk, Na, Nb) @ #j & j < i)
+      | (Ex #r. LtkReveal(Apk) @ #r)
+      | (Ex #r. LtkReveal(Bpk) @ #r)"
+
+/* Intended (non-injective) agreement for Responder */
+lemma auth_responder_ni:
+  "All Apk Bpk Na Nb #i.
+      R_Commit(Bpk, Apk, Na, Nb) @ #i
+    ==> (Ex #j. I_Running(Apk, Bpk, Na) @ #j & j < i)
+      | (Ex #r. LtkReveal(Apk) @ #r)
+      | (Ex #r. LtkReveal(Bpk) @ #r)"
+
+end
