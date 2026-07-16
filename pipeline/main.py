@@ -21,6 +21,7 @@ from . import config
 from .extractor import extract_spthy
 from .llm_client import LLMSession
 from .prompt_builder import build_repair_prompt, build_system_prompt, build_user_prompt
+from .prompt_generator import generate_prompt
 from .selector import select_bits
 from .validator import validate_spthy
 
@@ -43,8 +44,15 @@ def run_pipeline(name: str, description: str) -> bool:
     log["selected_bits"] = [f"{bit.phase}/{bit.name}" for bit in bits]
     print(f"[{name}] selected {len(bits)} blocks: {', '.join(bit.name for bit in bits)}")
 
+    print(f"[{name}] instantiating prompt framework with {config.PROMPT_GEN_MODEL}...")
+    generated = generate_prompt(description)
+    if generated is not None:
+        log["generated_prompt"] = generated
+        prompt = generated
+    else:
+        prompt = build_user_prompt(description)
+
     session = LLMSession(build_system_prompt(bits))
-    prompt = build_user_prompt(description)
     code = None
     success = False
 
@@ -127,12 +135,14 @@ def main() -> int:
         return 1
 
     if args.dry_run:
-        # Dry-run makes no API calls, so block selection is skipped and the
-        # system prompt shown here embeds the full ProtocolBits library.
+        # Dry-run makes no API calls, so block selection and framework prompt
+        # generation are skipped: the system prompt shown embeds the full
+        # ProtocolBits library, and the user prompt is the raw description.
         print("=== SYSTEM PROMPT (full library; real runs select blocks) ===\n")
         print(build_system_prompt())
         for name, description in jobs:
-            print(f"\n=== USER PROMPT ({name}) ===\n")
+            print(f"\n=== USER PROMPT ({name}; real runs instantiate "
+                  "PromptFramework.md) ===\n")
             print(build_user_prompt(description))
         return 0
 

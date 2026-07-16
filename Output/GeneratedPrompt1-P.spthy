@@ -1,0 +1,118 @@
+theory CCITT_X509_P
+begin
+
+builtins: asymmetric-encryption, signing, hashing
+
+// Events:
+// - ARole(ltKc): initiator (Alice) acts with private signing key ltKc
+// - BRole(ltKs): responder (Bob) acts with private key ltKs
+// - Running(pKc, pKs, t): initiator start on tuple t (agreement target)
+// - Commit(pKc, pKs, t): responder acceptance on tuple t (agreement target)
+// - Secret(pKc, pKs, secret): marks secrecy target
+// - OutA(msg): initiator's outgoing full message
+// - HonestA(pKc), HonestB(pKs): honest long-term public keys introduced
+// - Reveal(pK): long-term private key associated to public key pK is compromised
+
+// Initiator (Alice):
+// Parameters: ltKc (private signing key), pKc (her public key), pKs (responder's public key)
+let Initiator(ltKc, pKc, pKs) =
+  event ARole(ltKc);
+  new ts;                 // timestamp
+  new n;                  // nonce
+  new mC;                 // plaintext data field
+  new secret;             // secret payload intended for the responder
+  let xencC = aenc(secret, pKs) in
+  let body = <ts, n, pKs, mC, xencC> in
+  let H = h(body) in
+  let sig = sign(H, ltKc) in
+  let msg = <pKc, body, sig> in
+  event Running(pKc, pKs, <'A','B', mC, secret>);
+  event Secret(pKc, pKs, secret);
+  event OutA(msg);
+  out(msg)
+
+
+// Responder (Bob):
+// Parameters: ltKs (private decryption key), pKs (his public key), pKc (initiator's public key)
+let Responder(ltKs, pKs, pKc) =
+  event BRole(ltKs);
+  in(msg);
+  let <=pKc, body, sig> = msg in
+  let <ts, n, =pKs, mC, xencC> = body in
+  let secret = adec(xencC, ltKs) in
+  let H = h(body) in
+  if verify(sig, H, pKc) = true then
+    event Commit(pKc, pKs, <'A','B', mC, secret>);
+    event Secret(pKc, pKs, secret)
+  else
+    0
+
+
+// Key-compromise helper: leak a private key
+let CompromiseLtk(ltK) =
+  event Reveal(pk(ltK));
+  out(ltK)
+
+process:
+!(
+  new ltKc; let pKc = pk(ltKc) in
+  out(pKc);
+  event HonestA(pKc);
+  !(
+    new ltKs; let pKs = pk(ltKs) in
+    out(pKs);
+    event HonestB(pKs);
+    (
+      CompromiseLtk(ltKc)
+    | CompromiseLtk(ltKs)
+    | !Initiator(ltKc, pKc, pKs)
+    | !Responder(ltKs, pKs, pKc)
+    )
+  )
+)
+
+//// Lemmas ////
+
+// Secrecy of the secret payload unless a party is revealed
+lemma secrecy_secret_payload:
+  "not(
+     Ex pKc pKs secret #i #j.
+       Secret(pKc, pKs, secret) @ i
+       & K(secret) @ j
+       & not(Ex #r. Reveal(pKc) @ r)
+       & not(Ex #r. Reveal(pKs) @ r)
+   )"
+
+// Non-injective agreement (responder's view)
+lemma agreement_B:
+  "All pKc pKs mC secret #i.
+     Commit(pKc, pKs, <'A','B', mC, secret>) @ i
+     ==>
+       (Ex #j. Running(pKc, pKs, <'A','B', mC, secret>) @ j & j < i)
+       | (Ex #r. Reveal(pKc) @ r)
+       | (Ex #r. Reveal(pKs) @ r)"
+
+// Injective agreement (responder's view)
+lemma injective_agreement_B:
+  "All pKc pKs mC secret #i.
+     Commit(pKc, pKs, <'A','B', mC, secret>) @ i
+     ==>
+       (
+         (Ex #j. Running(pKc, pKs, <'A','B', mC, secret>) @ j & j < i)
+         & not(Ex #i2. Commit(pKc, pKs, <'A','B', mC, secret>) @ i2 & not(#i2 = #i))
+       )
+       | (Ex #r. Reveal(pKc) @ r)
+       | (Ex #r. Reveal(pKs) @ r)"
+
+// Sanity / executability: an honest run is possible without compromise
+lemma executability:
+  exists-trace
+  "Ex pKc pKs mC secret #i #j.
+     Running(pKc, pKs, <'A','B', mC, secret>) @ i
+     & Commit(pKc, pKs, <'A','B', mC, secret>) @ j
+     & i < j
+     & not(Ex #r. Reveal(pKc) @ r)
+     & not(Ex #r. Reveal(pKs) @ r)
+  "
+
+end

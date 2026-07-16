@@ -1,0 +1,29 @@
+Write a SAPIC+ protocol model (in Tamarin's .spthy format) for a simple client–server session-key establishment protocol. Name the theory running_ex_P. Use the hashing and asymmetric-encryption builtins.
+Client role — takes the client's own secret key and the server's public key as arguments:
+
+Generate a fresh symmetric key k.
+Encrypt k under the server's public key and send the ciphertext out.
+Receive a cipher back from the network.
+Check that the received cipher equals h(k) (the hash of k); proceed only if it matches.
+Emit an event SessKeyC(pkS, k) recording that the client accepted session key k with server public key pkS.
+
+Server role — takes the server's own secret key and public key as arguments:
+
+Receive a request from the network.
+Decrypt it with the server's secret key to recover key.
+Emit an event AnswerRequest(pkS, key).
+Compute h(key) and send it out.
+
+Top-level process — build it with nested replication so there are unboundedly many servers, each with unboundedly many clients:
+
+Replicate: create a fresh server long-term secret sks, publish pk(sks).
+Under that, replicate: create a fresh client long-term secret skc, publish pk(skc).
+Run (in parallel) unbounded instances of the Client (with skc and pk(sks)) alongside a branch that leaks the client's key: emit LtkReveal(pk(skc)) and output pk(skc).
+In parallel, run unbounded instances of the Server (with sks and pk(sks)) alongside a branch that leaks the server's key: emit LtkReveal(pk(sks)) and output pk(sks).
+
+Lemmas — include all four:
+
+Client_session_key_secrecy: it's impossible for a client to accept a session key k with server S while the adversary also knows k, unless a long-term key reveal occurred on S.
+Client_auth: whenever a client accepts key k with server S, either the server actually answered that request (AnswerRequest(S, k)), or the adversary revealed S's long-term key before the key was set up.
+Client_auth_injective: same as Client_auth, but strengthened so the answering request is unique — no two client sessions accept the same (S, k) — again with the key-reveal escape clause.
+Client_session_key_honest_setup: an exists-trace lemma showing there's at least one trace where a client sets up a session key with a server and no long-term key reveal happened on that server (a sanity/executability check).

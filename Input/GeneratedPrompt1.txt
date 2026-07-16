@@ -1,0 +1,41 @@
+Write a formal security-protocol model in Tamarin Prover using the SAPIC+ process calculus (applied-pi style let/process blocks, not multiset rewrite rules). The protocol to model is the CCITT X.509 one-pass authentication protocol, where an initiator sends a single signed, partly-encrypted message to a responder.
+Cryptographic setup
+
+Use the built-in equational theories for asymmetric (public-key) encryption and for digital signatures.
+Declare a one-argument hash function h.
+
+Roles. Model two roles as separate process definitions.
+Initiator (Alice) — parameters: her private signing key, her own public key, and the responder's public key.
+
+Emit an event recording that she is acting in the initiator role (tagged with her private key).
+Generate four fresh values: a timestamp, a nonce, a plaintext data field, and a secret payload intended for the responder.
+Build the message body as the tuple: timestamp, nonce, responder's public key, the plaintext data field, and the secret payload encrypted under the responder's public key.
+Hash the message body.
+Form the full message as: initiator's public key, the message body, and a signature over the hash using her private key.
+Before sending, emit: a Running event binding initiator, responder, and the tuple ⟨'A','B', data field, secret payload⟩; a Secret event over (initiator pk, responder pk, secret payload); and an event capturing the outgoing message.
+Send the message.
+
+Responder (Bob) — parameters: his private key, his own public key, and the initiator's public key.
+
+Emit an event recording that he is acting in the responder role.
+Receive a message and pattern-match it into: the (expected) initiator public key, a body, and a signature.
+Pattern-match the body into: timestamp, nonce, (expected) his own public key, the data field, and the encrypted payload.
+Decrypt the payload with his private key.
+Recompute the hash of the body and verify the signature against the initiator's public key.
+Only if verification succeeds, emit a Commit event binding initiator, responder, and the tuple ⟨'A','B', data field, secret payload⟩, and a Secret event over (initiator pk, responder pk, secret payload).
+
+Key-compromise helper — a process that, given a private key, emits a Reveal event on the corresponding public key and outputs the private key to the attacker.
+Top-level process. Use unbounded replication with this nesting:
+
+For each of unboundedly many initiators: create a fresh initiator key, publish its public key, emit an HonestA event on that public key.
+Nested inside, for each of unboundedly many responders: create a fresh responder key, publish its public key, emit an HonestB event.
+In parallel, allow: compromise of the initiator key, compromise of the responder key, and unboundedly many replicated runs of both the initiator and responder roles using the matching keys.
+
+Lemmas to include.
+
+Secrecy — the secret payload flagged by a Secret event is never learned by the attacker, unless one of the two involved parties has been compromised (revealed).
+Injective agreement (responder's view) — whenever the responder commits on some tuple, there is an earlier matching initiator Running event on the same tuple, with no second distinct commit on that tuple (injectivity), unless a party was compromised.
+Non-injective agreement (responder's view) — same as above but without the injectivity/uniqueness condition.
+Sanity / executability — an exists-trace lemma showing an honest run is possible: a Running and a matching Commit on the same tuple, with neither party revealed.
+
+Name the theory something like CCITT_X509_P. Use consistent role tags 'A' and 'B' in the agreement tuples.

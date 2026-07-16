@@ -1,0 +1,91 @@
+theory CSKB_V1
+begin
+
+builtins: asymmetric-encryption
+functions: h/1
+
+// Roles
+
+let Client(pkS) =
+  event ClientStart(pkS);
+  new k;
+  event Secret(k, 'C', 'S');
+  let c1 = aenc(k, pkS) in
+  out(c1);
+  in(r);
+  let hk = h(k) in
+  if r = hk then
+    event Commit('C','S', pkS, k)
+
+let Server(skS, pkS) =
+  event ServerStart(pkS);
+  in(x);
+  let k = adec(x, skS) in
+  event Secret(k, 'C', 'S');
+  event Running('C','S', pkS, k);
+  let hk = h(k) in
+  out(hk)
+
+let KeyComp(skS, pkS) =
+  in(trig);
+  event Reveal(pkS);
+  out(skS)
+
+process:
+!(
+  new skS;
+  let pkS = pk(skS) in
+  out(pkS);
+  event HonestS(pkS);
+  ( !Server(skS, pkS)
+  | !Client(pkS)
+  | !KeyComp(skS, pkS) )
+)
+
+// Lemmas
+
+lemma secrecy_of_session_key:
+  "not(
+     Ex k #i #j.
+       Secret(k, 'C', 'S') @ i
+       & K(k) @ j
+       & not(Ex pkS #r. Reveal(pkS) @ r)
+   )"
+
+lemma noninjective_agreement_server_to_client:
+  "All pkS k #i.
+     Commit('C','S', pkS, k) @ i
+     ==>
+       (Ex #j. Running('C','S', pkS, k) @ j & j < i)
+       | (Ex #r. Reveal(pkS) @ r)
+  "
+
+lemma injective_agreement_server_to_client:
+  "All pkS k #i.
+     Commit('C','S', pkS, k) @ i
+     ==>
+       ( (Ex #j. Running('C','S', pkS, k) @ j & j < i
+              & not(Ex #i2. Commit('C','S', pkS, k) @ i2 & i2 < i))
+         | (Ex #r. Reveal(pkS) @ r)
+       )
+  "
+
+lemma executability:
+  exists-trace
+  "Ex pkS k #r #c.
+     Running('C','S', pkS, k) @ r
+     & Commit('C','S', pkS, k) @ c
+     & r < c
+     & not(Ex #rv. Reveal(pkS) @ rv)
+  "
+
+lemma key_uniqueness_no_compromise:
+  "All pkS k #i #j.
+     Commit('C','S', pkS, k) @ i
+     & Commit('C','S', pkS, k) @ j
+     & not(Ex #r. Reveal(pkS) @ r)
+     ==>
+     i = j
+  "
+
+end

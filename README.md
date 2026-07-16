@@ -8,6 +8,8 @@ the local knowledge base.
 
 ```
 PipelineV2/
+├── NamingConventions.md variable naming rules embedded in every generation prompt
+├── PromptFramework.md   framework the LLM instantiates into the generation prompt
 ├── ProtocolBits/        SAPIC+ building blocks, grouped by protocol phase
 ├── Benchmark/           ground truth: <name>.txt (English) + <name>-P.spthy
 ├── Input/               drop user English descriptions here (.txt)
@@ -16,6 +18,7 @@ PipelineV2/
 │   ├── config.py        paths, models, few-shot choices, retry limits
 │   ├── knowledge.py     loads ProtocolBits + Benchmark example pairs
 │   ├── selector.py      LLM call picking the building blocks relevant to the input
+│   ├── prompt_generator.py  LLM call instantiating PromptFramework.md for the input
 │   ├── prompt_builder.py  English input -> system/user/repair prompts
 │   ├── llm_client.py    OpenAI chat wrapper (conversation kept across repairs)
 │   ├── extractor.py     pulls the ```spthy block out of the LLM response
@@ -32,21 +35,27 @@ PipelineV2/
    English description against a catalog of ProtocolBits names/summaries and
    picks the blocks that fit the scenario. If the call fails or returns
    nothing usable, the full library is used instead.
-2. **Build the prompt** — the description is wrapped into a prompt whose
-   system message embeds the selected building blocks and a few Benchmark
+2. **Instantiate the prompt framework** — a second LLM call
+   (`prompt_generator.py`, `config.PROMPT_GEN_MODEL`, override with
+   `OPENAI_PROMPT_GEN_MODEL`) fills in `PromptFramework.md` for the given
+   protocol, producing a structured specification (summary, crypto setup,
+   roles, top-level process, lemmas). That completed text becomes the
+   generation prompt; if the call fails, the raw description is used.
+3. **Build the system prompt** — the system message embeds the naming
+   conventions, the selected building blocks, and a few Benchmark
    (description → code) pairs as worked examples (`prompt_builder.py`,
    examples chosen in `config.FEW_SHOT_EXAMPLES`).
-3. **Generate** — the prompt goes to OpenAI (`config.OPENAI_MODEL`, default
+4. **Generate** — the prompts go to OpenAI (`config.OPENAI_MODEL`, default
    `gpt-5`; override with the `OPENAI_MODEL` env var).
-4. **Extract & validate** — the ```spthy block is extracted and parsed with
+5. **Extract & validate** — the ```spthy block is extracted and parsed with
    `tamarin-prover --parse-only`.
-5. **Repair loop** — on a parse error, the tamarin message is sent back to
+6. **Repair loop** — on a parse error, the tamarin message is sent back to
    the model (same conversation) for a fix, up to
    `config.MAX_REPAIR_ATTEMPTS` times.
-6. **Output** — a validated theory is written to `Output/<name>-P.spthy`,
-   alongside `Output/<name>-log.json` recording every attempt and the
-   selected building blocks. A run that never validates is kept as
-   `<name>-P.failed.spthy` for inspection.
+7. **Output** — a validated theory is written to `Output/<name>-P.spthy`,
+   alongside `Output/<name>-log.json` recording every attempt, the selected
+   building blocks, and the generated prompt. A run that never validates is
+   kept as `<name>-P.failed.spthy` for inspection.
 
 ## Setup
 

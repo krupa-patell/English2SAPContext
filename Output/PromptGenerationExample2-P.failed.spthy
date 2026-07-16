@@ -1,0 +1,191 @@
+theory DENNING_SACCO_SYMKEY
+begin
+
+/* Denning–Sacco Symmetric-Key Protocol (timestamped variant)
+   - Server-mediated key distribution of Kab for A and B with ticket and timestamp T.
+   - Uses SAPIC+ state (insert/lookup) for private server-side registration.
+*/
+
+builtins: symmetric-encryption
+table ltk/2
+
+/* Roles */
+
+let Initiator(A, Ksa) =
+  in(B);                                  /* intended peer identity, attacker-chosen or nondet. */
+  event StartA(A, B);
+  /* m1: A -> S : (A, B) */
+  out(<A, B>);
+  /* m2: S -> A : senc( (B, Kab, T, Ticket), Ksa ) */
+  in(xencS);
+  let < =B, Kab, T, Ticket > = sdec(xencS, Ksa) in   /* equality check on B as specified */
+  /* Security-relevant events */
+  event Secret(A, B, Kab);
+  event CommitA(A, B, Kab, T);
+  /* m3: A -> B : Ticket  (opaque: senc( (Kab, A, T), Ksb )) */
+  out(Ticket)
+
+
+let Responder(B, Ksb) =
+  event StartB(B);
+  /* m3: A -> B : Ticket */
+  in(Ticket);
+  let < Kab, A_from_ticket, T > = sdec(Ticket, Ksb) in
+  /* Security-relevant events */
+  event Secret(A_from_ticket, B, Kab);
+  event CommitB(A_from_ticket, B, Kab, T)
+
+
+let Server() =
+  event StartS();
+  /* Receive request */
+  in(req);
+  let <A, B> = req in
+  /* Look up registered long-term symmetric keys for A and B */
+  lookup ltk(A, Ksa) in
+  lookup ltk(B, Ksb) in
+  /* Fresh session key and timestamp */
+  new Kab;
+  new T;
+  /* Construct ticket and payload */
+  let Ticket  = senc(<Kab, A, T>, Ksb) in
+  let Payload = <B, Kab, T, Ticket> in
+  /* Security-relevant events before sending */
+  event RunningS(A, B, Kab, T);
+  event Secret(A, B, Kab);
+  /* Send response */
+  out(senc(Payload, Ksa))
+
+
+/* Key-compromise helper: upon trigger "('reveal', X)" outputs long-term key of X */
+let RevealHelper(X, Ksx) =
+  in(< 'reveal', X >);
+  event Reveal(X);
+  out(Ksx)
+
+
+/* System composition:
+   - Unboundedly many agent identities X with fresh long-term keys Ksx, registered privately (insert).
+   - Publicly output identities (not keys) so peers can reference each other.
+   - Replicated Initiator/Responder/RevealHelper per identity.
+   - Replicated stateless Server using the global registration store.
+*/
+process:
+(
+  !Server()
+|
+  !(
+    new X; new Ksx;
+    insert ltk(X, Ksx);
+    event HonestAgent(X);
+    out(X);                      /* publish identity; registration (ltk) remains private */
+    ( !Initiator(X, Ksx) | !Responder(X, Ksx) | !RevealHelper(X, Ksx) )
+  )
+)
+
+/* Lemmas */
+
+/* 1) Secrecy: session key confidentiality unless A or B is revealed beforehand */
+lemma secrecy_session_key:
+  "All A B K #i.
+     Secret(A, B, K) @ #i
+     ==>
+       (not (Ex #j. K(K) @ #j))
+       | (Ex #r. Reveal(A) @ #r & #r < #i)
+       | (Ex #r. Reveal(B) @ #r & #r < #i)
+  "
+
+
+/* 2) Injective agreement (A authenticates S) */
+lemma injective_agree_A:
+  "All A B K T #i.
+     CommitA(A, B, K, T) @ #i
+     ==>
+       (
+         Ex #j.
+           RunningS(A, B, K, T) @ #j
+           & #j < #i
+           & (All #j2. RunningS(A, B, K, T) @ #j2 ==> #j2 = #j)
+           & (All #i2. CommitA(A, B, K, T) @ #i2 ==> #i2 = #i)
+       )
+       | (Ex #r. Reveal(A) @ #r & #r < #i)
+       | (Ex #r. Reveal(B) @ #r & #r < #i)
+  "
+
+
+/* 3) Non-injective agreement (A authenticates S) */
+lemma agree_A:
+  "All A B K T #i.
+     CommitA(A, B, K, T) @ #i
+     ==>
+       (Ex #j. RunningS(A, B, K, T) @ #j & #j < #i)
+       | (Ex #r. Reveal(A) @ #r & #r < #i)
+       | (Ex #r. Reveal(B) @ #r & #r < #i)
+  "
+
+
+/* 4) Injective agreement (B authenticates S) */
+lemma injective_agree_B:
+  "All A B K T #i.
+     CommitB(A, B, K, T) @ #i
+     ==>
+       (
+         Ex #j.
+           RunningS(A, B, K, T) @ #j
+           & #j < #i
+           & (All #j2. RunningS(A, B, K, T) @ #j2 ==> #j2 = #j)
+           & (All #i2. CommitB(A, B, K, T) @ #i2 ==> #i2 = #i)
+       )
+       | (Ex #r. Reveal(A) @ #r & #r < #i)
+       | (Ex #r. Reveal(B) @ #r & #r < #i)
+  "
+
+
+/* 5) Non-injective agreement (B authenticates S) */
+lemma agree_B:
+  "All A B K T #i.
+     CommitB(A, B, K, T) @ #i
+     ==>
+       (Ex #j. RunningS(A, B, K, T) @ #j & #j < #i)
+       | (Ex #r. Reveal(A) @ #r & #r < #i)
+       | (Ex #r. Reveal(B) @ #r & #r < #i)
+  "
+
+
+/* 6) Executability: there exists an honest complete run */
+lemma executability:
+  exists-trace
+  "Ex A B K T #i #j #k.
+     RunningS(A, B, K, T) @ #i
+   & CommitA(A, B, K, T) @ #j
+   & CommitB(A, B, K, T) @ #k
+   & #i < #j & #j < #k
+   & not (Ex #r. Reveal(A) @ #r)
+   & not (Ex #r. Reveal(B) @ #r)
+  "
+
+
+/* 7) Session-key agreement: A and B agree on (K, T) and on S's run */
+lemma session_key_agreement:
+  "All A B K1 K2 T1 T2 #i #j.
+     CommitA(A, B, K1, T1) @ #i
+   & CommitB(A, B, K2, T2) @ #j
+   & not (Ex #r. Reveal(A) @ #r)
+   & not (Ex #r. Reveal(B) @ #r)
+   ==>
+     K1 = K2
+   & T1 = T2
+   & (Ex #s. RunningS(A, B, K1, T1) @ #s & #s < #i & #s < #j)
+  "
+
+
+/* 8) Server-side key uniqueness: the same K is never re-used across different (A,B,T) */
+lemma server_key_uniqueness:
+  "All A1 B1 A2 B2 K T1 T2 #i #j.
+     RunningS(A1, B1, K, T1) @ #i
+   & RunningS(A2, B2, K, T2) @ #j
+   ==>
+     A1 = A2 & B1 = B2 & T1 = T2
+  "
+
+end

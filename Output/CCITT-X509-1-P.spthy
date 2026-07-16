@@ -1,138 +1,127 @@
-theory Certification_Token_P
+theory Certification_Path_Token
 begin
 
-builtins: asymmetric-encryption, signing, hashing
-functions: id/1
+/* 
+  Model of a certification-path-based signed-and-encrypted token exchange.
 
-// CA issues a certificate for A's public signing key: certA = < <idA, pKA>, sign(<idA, pKA>, skCA) >
-let CAResponder(skCA) =
-  in(< 'req_cert', idA, pKA >);
-  let infoA = <idA, pKA> in
-  let certA = <infoA, sign(infoA, skCA)> in
-  event CertIssued(idA, pKA);
-  out(< 'cert', certA >)
+  Roles:
+    - A (originator/signer): creates a token with (tA, rA, B_id, sgnData, aenc(encData, pkB)),
+      signs the whole payload with A's secret key, and sends it together with a certification
+      path "B -> A" enabling the receiver to obtain A's public key.
+    - B (recipient): parses the certification path to obtain A's public key, verifies A's
+      signature on the payload, checks that it is the intended recipient, and decrypts the
+      confidential part with its secret key.
 
-// A constructs and sends: < pathBA, payload, sigA >
-// pathBA = <'pathBA', certA> where certA binds idA to A's public key under CA's signature
-// payload = <tA, rA, idB, sgnData, aenc(encData, pKB)>
-// sigA = sign(payload, skA)
-let A(skA) =
-  // Obtain B's public key (published by B)
-  in(pKB);
-  let idB = id(pKB) in
-  // Obtain a certificate for A's key from CA
-  let idA = id(pk(skA)) in
-  out(< 'req_cert', idA, pk(skA) >);
-  in(< 'cert', certA >);
-  // Create token
-  new rA; event FreshNonce(idA, rA);
-  new tA;
-  new sgnData;
-  new encData;
-  let ct = aenc(encData, pKB) in
-  let payload = <tA, rA, idB, sgnData, ct> in
-  let sigA = sign(payload, skA) in
-  let pathBA = < 'pathBA', certA > in
-  event ASent(idA, idB, rA, tA, encData);
-  event EncDataSecret(encData);
-  out(< pathBA, payload, sigA >);
-  0
+  Primitives:
+    - Digital signatures (builtins: signing)
+    - Public-key encryption (builtins: asymmetric-encryption)
 
-// B verifies the certificate chain element (issued by CA), verifies A's signature,
-// checks that B is the intended recipient, and decrypts encData.
-let B(skB) =
-  let pkB = pk(skB) in
-  let idB = id(pkB) in
-  // Publish B's public encryption key so A can encrypt to B
-  out(pkB);
-  // Trust anchor (CA public key) is published globally by CA setup
-  in(pkCA);
-  // Receive the token from A
-  in(m);
-  let <pathBA, payload, sigA> = m in
-  let < 'pathBA', certA > = pathBA in
-  let <infoA, sigCA> = certA in
-  let <idA, pKA> = infoA in
-  // Verify certificate issued by CA
-  if verify(sigCA, infoA, pkCA) = true then
-    // Check intended recipient and verify A's signature over the payload
-    let <tA, rA, =idB, sgnData, ct> = payload in
-    if verify(sigA, payload, pKA) = true then
-      let encData = adec(ct, skB) in
-      event BAccept(idA, idB, rA, tA, encData);
-      event EncDataSecret(encData);
-      0
-    else 0
-  else 0
+  Intended security goals:
+    - Secrecy: encData remains secret unless B's long-term decryption key is compromised.
+    - Authentication (non-injective agreement): If B accepts a token (CommitB), then A
+      previously sent a matching token (RunningA), unless a long-term key is compromised.
 
-// Support roles for key reveal to model compromise
-let RevealLtkById(sk) =
-  let idX = id(pk(sk)) in
-  event LtkReveal(idX); out(sk)
+  Notes:
+    - The certification path "B -> A" is modeled as an explicit tuple carrying A's public key.
+      Its cryptographic validation is abstracted; authentication is ultimately ensured via
+      verification of A's signature with the conveyed public key.
+    - Replay/time-window logic is recorded via events (StoreToken) but not enforced by state.
+*/
 
-// One-time CA setup (publishes pkCA and runs certificate responder)
-let CA() =
-  new skCA; out(pk(skCA)); event CAInit(pk(skCA));
-  !CAResponder(skCA)
+builtins: asymmetric-encryption, signing
 
-// Compose the system:
-// - A and B principals are replicated
-// - CA is started and its public key published
-// - Long-term key reveal branches are provided (LtkReveal)
+functions:
+  id/1,          // identity derived from a public key (or any tag)
+  hash/1         // abstract hash used to model stored hashed token (no equations)
+
+/* Role A: construct and send signed-and-encrypted token plus certification path "B -> A". */
+let A(ltKa, idA, pkB, idB) =
+  new rA;                 // fresh nonce to prevent replay/forgery
+  new tA;                 // timestamp/validity indicator (abstracted as fresh)
+  new sgnData;            // non-confidential associated parameters
+  new encData;            // confidential parameters (e.g., secret keys)
+  let ct   = aenc(encData, pkB) in
+  let pl   = <tA, rA, idB, sgnData, ct> in
+  let sig  = sign(pl, ltKa) in
+  let tok  = <pl, sig> in
+  // Certification path B -> A: carries A's public key for B to verify the signature.
+  let path = <'PATH','BtoA', idB, idA, pk(ltKa)> in
+  event RunningA(idA, idB, <tA, rA, sgnData, encData>);
+  event SignA(pk(ltKa), pl);
+  out(<path, tok>)
+
+/* Role B: obtain A's public key from "B -> A" path, verify signature, check recipient, decrypt. */
+let B(ltKb, idB) =
+  in(msg);
+  let <path, tok> = msg in
+  // Parse certification path "B -> A" and extract A's identifier and public key
+  let <'PATH','BtoA', =idB, idA, pkA> = path in
+  let <pl, sig> = tok in
+  if verify(sig, pl, pkA) = true then
+    let <tA, rA, =idB, sgnData, ct> = pl in
+    let encData = adec(ct, ltKb) in
+    // Record acceptance and secrecy-relevant event; also store hash of token for replay window
+    event CommitB(idA, idB, <tA, rA, sgnData, encData>);
+    event SecretAtB(pk(ltKb), encData);
+    event StoreToken(idB, tA, rA, hash(tok))
+  else
+    0
+
+/* Optional: explicit long-term key compromise events to condition lemmas on. */
+let LtkCompromise(ltK) =
+  event LtkReveal(pk(ltK)); out(ltK)
+
+/* System composition:
+   - Each replicated instance creates fresh long-term keys for A and B and publishes their pks.
+   - Roles A and B run in parallel; key-compromise branches model LTK leakage.
+*/
 process:
 !(
-  CA()
-  |
-  !(
-     new skB;
-     ( !B(skB) | RevealLtkById(skB) )
-   )
-  |
-  !(
-     new skA;
-     ( !A(skA) | RevealLtkById(skA) )
-   )
+  new ltKa; new ltKb;
+  let pKa = pk(ltKa) in
+  let pKb = pk(ltKb) in
+  let idA = id(pKa) in
+  let idB = id(pKb) in
+  out(pKa); out(pKb);
+  event InitA(pKa); event InitB(pKb);
+  (
+      !A(ltKa, idA, pKb, idB)
+    | !B(ltKb, idB)
+    | LtkCompromise(ltKa)
+    | LtkCompromise(ltKb)
+  )
 )
 
-//// Lemmas ////
 
-// Sanity: some execution reaches B's acceptance.
-lemma executability:
+/* Lemmas */
+
+// Executability: there exists a trace where B accepts a token.
+lemma executable:
   exists-trace
-  "Ex idA idB rA tA e #i. BAccept(idA,idB,rA,tA,e) @ i"
+  "Ex idA idB tA rA sD eD #i.
+     CommitB(idA, idB, <tA, rA, sD, eD>) @ i"
 
-// Secrecy of encData: if B accepts with encData = e, then e is unknown to the adversary
-// unless B's long-term decryption key (identified by idB) was revealed.
-lemma encdata_secrecy:
+// Secrecy: encData remains unknown unless B's decryption LTK is compromised.
+lemma encData_secrecy:
 "
   not(
-    Ex idA idB rA tA e #i #j.
-      BAccept(idA,idB,rA,tA,e) @ #i
-      & K(e) @ #j
-      & not(Ex #r. LtkReveal(idB) @ #r)
+    Ex pKb eD #i #j.
+      SecretAtB(pKb, eD) @ i
+      & K(eD) @ j
+      & not(Ex #r. LtkReveal(pKb) @ r)
   )
 "
 
-// Authentication (non-injective) for B:
-// If B accepts a token, then either A sent that exact token earlier,
-// or the attack is explained by prior compromise of A's signing key.
-lemma auth_B_noninj:
+// Authentication (B's view, non-injective):
+// If B accepts a token, then A previously sent a matching one,
+// unless some long-term key (signing or decryption) is compromised.
+lemma noninjective_auth_B:
 "
-  All idA idB rA tA e #i.
-    BAccept(idA,idB,rA,tA,e) @ #i
+  All idA idB tA rA sD eD #i.
+    CommitB(idA, idB, <tA, rA, sD, eD>) @ i
     ==>
-     (Ex #j. ASent(idA,idB,rA,tA,e) @ #j & #j < #i)
-     | (Ex #r. LtkReveal(idA) @ #r & #r < #i)
-"
-
-// Certificate causality: any acceptance by B implies that CA issued a
-// certificate binding idA to some public key earlier.
-lemma cert_causality:
-"
-  All idA idB rA tA e #i.
-    BAccept(idA,idB,rA,tA,e) @ #i
-    ==>
-      (Ex pKA #j. CertIssued(idA,pKA) @ #j & #j < #i)
+      (Ex #j. RunningA(idA, idB, <tA, rA, sD, eD>) @ j & j < i)
+      | (Ex pK #r. LtkReveal(pK) @ r)
 "
 
 end

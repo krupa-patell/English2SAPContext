@@ -1,0 +1,79 @@
+theory running_ex_P
+begin
+
+builtins: hashing, asymmetric-encryption
+
+// Roles
+
+let Client(ltKc, pKs) =
+  new psk;                               // fresh session key
+  let xencC = aenc(psk, pKs) in          // encrypt under Server's public key
+  out(xencC);
+  in(H);                                 // receive purported confirmation
+  if h(psk) = H then
+    event SessKeyC(pKs, psk)             // Client accepts session key with Server pk
+  else 0
+
+let Server(ltKs, pKs) =
+  in(xencC);                             // receive encrypted session key
+  let key = adec(xencC, ltKs) in         // decrypt with Server's secret key
+  event AnswerRequest(pKs, key);
+  let H = h(key) in
+  out(H)
+
+process:
+!(
+  new ltKs; out(pk(ltKs));                              // fresh server keypair; publish pk
+  !(
+    new ltKc; out(pk(ltKc));                            // fresh client keypair; publish pk
+      ( !Client(ltKc, pk(ltKs))                         // unbounded clients using this server
+        | ( event LtkReveal(pk(ltKc)); out(pk(ltKc)) )  // branch: leak client's long-term key (identified by pk)
+      )
+    | ( !Server(ltKs, pk(ltKs))                         // unbounded servers (sessions) for this keypair
+        | ( event LtkReveal(pk(ltKs)); out(pk(ltKs)) )  // branch: leak server's long-term key (identified by pk)
+      )
+  )
+)
+
+//// Lemmas ////
+
+lemma Client_session_key_secrecy:
+"
+  not(
+    Ex pKs psk #i #j.
+      SessKeyC(pKs, psk) @ i
+      & K(psk) @ j
+      & not(Ex #r. LtkReveal(pKs) @ r)
+  )
+"
+
+lemma Client_auth:
+"
+  All pKs psk #i.
+    SessKeyC(pKs, psk) @ i
+    ==>
+      (Ex #a. AnswerRequest(pKs, psk) @ a)
+      | (Ex #r. LtkReveal(pKs) @ r & r < i)
+"
+
+lemma Client_auth_injective:
+"
+  All pKs psk #i.
+    SessKeyC(pKs, psk) @ i
+    ==>
+      (
+        (Ex #a. AnswerRequest(pKs, psk) @ a)
+        & not(Ex #i2. SessKeyC(pKs, psk) @ i2 & not(i2 = i))
+      )
+      | (Ex #r. LtkReveal(pKs) @ r & r < i)
+"
+
+lemma Client_session_key_honest_setup:
+exists-trace
+"
+  Ex pKs psk #i.
+    SessKeyC(pKs, psk) @ i
+    & not(Ex #r. LtkReveal(pKs) @ r)
+"
+
+end

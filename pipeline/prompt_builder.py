@@ -25,6 +25,9 @@ Requirements for every theory you produce:
 - Emit `event` actions at protocol milestones so lemmas can reference them.
 - Include at least one `exists-trace` executability lemma, plus secrecy or
   authentication lemmas appropriate to the description's security goals.
+- Name variables according to the naming conventions below whenever the
+  protocol has a matching concept; only deviate for concepts the
+  conventions do not cover (following their style, e.g. role suffixes).
 - Output the theory inside a single ```spthy fenced code block and nothing
   else outside it besides brief notes.
 
@@ -32,6 +35,15 @@ Below is a library of reusable SAPIC+ "building blocks", pre-selected as
 relevant to the protocol at hand. Reuse their patterns (adapted to the
 protocol) whenever they fit.
 """
+
+
+def _format_naming_conventions() -> str:
+    if not config.NAMING_CONVENTIONS_FILE.exists():
+        return ""
+    conventions = config.NAMING_CONVENTIONS_FILE.read_text(
+        encoding="utf-8", errors="replace"
+    )
+    return f"\n# Naming conventions\n\n{conventions.strip()}\n"
 
 
 def _format_bits(bits: list[ProtocolBit]) -> str:
@@ -64,7 +76,12 @@ def build_system_prompt(bits: list[ProtocolBit] | None = None) -> str:
     """
     if bits is None:
         bits = load_protocol_bits()
-    return SYSTEM_HEADER + _format_bits(bits) + _format_examples()
+    return (
+        SYSTEM_HEADER
+        + _format_naming_conventions()
+        + _format_bits(bits)
+        + _format_examples()
+    )
 
 
 def build_user_prompt(description: str) -> str:
