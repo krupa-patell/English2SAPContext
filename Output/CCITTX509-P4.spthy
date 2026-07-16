@@ -1,0 +1,82 @@
+theory CertPath_Token
+begin
+
+builtins: asymmetric-encryption, signing, hashing
+
+/* Roles:
+   - A (originator, signer): creates rA, tA, sgnData, and confidential encData,
+     computes xenc = aenc(encData, pkB), signs h(info), and sends:
+       < ('path', pkB, pkA), info = <tA, rA, pkB, sgnData, xenc>, sigA >
+   - B (recipient, decryptor/verifier): extracts pkA from the certification path,
+     verifies signature over info using pkA, checks recipient field and timestamp,
+     decrypts xenc with its secret key to recover conf, and accepts.
+*/
+
+/* Events:
+   ASent(pkA, pkB, tA, rA, sgnData, xenc, sig)
+   BAccept(pkA, pkB, tA, rA, sgnData, xenc, conf)
+   LtkReveal(pkX)
+*/
+
+let A(~skA) =
+  in(pKb);                                  // obtain B's public key (e.g., from directory or path)
+  new rA;                                   // fresh anti-replay value
+  let tA = 'now' in                         // abstract timestamp freshness
+  new conf;                                 // confidential parameter(s) to B
+  new sgnData;                              // non-confidential parameters
+  let xenc = aenc(conf, pKb) in             // Bp[encData]
+  let info = <tA, rA, pKb, sgnData, xenc> in
+  let sigA = sign(h(info), ~skA) in         // signature over hashed info
+  let path = <'path', pKb, pk(~skA)> in     // certification path B -> A carrying pkA
+  event ASent(pk(~skA), pKb, tA, rA, sgnData, xenc, sigA);
+  out(<path, info, sigA>);
+  0
+
+let B(~skB) =
+  out(pk(~skB));                            // publish B's public key
+  in(msg);
+  let <path, info, sigA> = msg in
+  let <'path', pKb_in_path, pkA> = path in  // extract pkA from the path and the intended pkB
+  if pKb_in_path = pk(~skB) then            // ensure path targets this B
+  let <tA, rA_recv, pKb_info, sgnData, xenc> = info in
+  if pKb_info = pk(~skB) then               // ensure B is intended recipient in the token
+  if verify(sigA, h(info), pkA) = true then // verify signature integrity/origin
+  if tA = 'now' then                        // abstract "timestamp current" check
+  let conf = adec(xenc, ~skB) in            // decrypt confidential parameters
+  event BAccept(pkA, pk(~skB), tA, rA_recv, sgnData, xenc, conf);
+  0
+
+/* Optional compromise of long-term keys */
+let Reveal(ltk) =
+  event LtkReveal(pk(ltk));
+  out(ltk)
+
+process:
+!(
+  new ~skA; out(pk(~skA));
+  new ~skB; out(pk(~skB));
+  (
+      !A(~skA)
+    | !B(~skB)
+    | Reveal(~skA)
+    | Reveal(~skB)
+  )
+)
+
+lemma executable:
+  exists-trace
+  "Ex pkA pkB t r s xenc conf #i.
+     BAccept(pkA, pkB, t, r, s, xenc, conf) @ i"
+
+lemma confidentiality_conf:
+  "All pkA pkB t r s xenc conf #i.
+     BAccept(pkA, pkB, t, r, s, xenc, conf) @ i
+     ==> (not (Ex #j. K(conf) @ j)) | (Ex #rB. LtkReveal(pkB) @ rB)"
+
+lemma origin_authentication:
+  "All pkA pkB t r s xenc conf #i.
+     BAccept(pkA, pkB, t, r, s, xenc, conf) @ i
+     ==> (Ex sig #j. ASent(pkA, pkB, t, r, s, xenc, sig) @ j & j < i)
+         | (Ex #rA. LtkReveal(pkA) @ rA & rA < i)"
+
+end

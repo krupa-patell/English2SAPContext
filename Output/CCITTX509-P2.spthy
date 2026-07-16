@@ -1,0 +1,101 @@
+theory CertPath_Sign_Enc_Token
+begin
+
+builtins: asymmetric-encryption, signing, hashing
+
+/* 
+   Roles:
+   - CA: issues certificates binding names to public keys; publishes pk(CA)
+   - A: obtains a certificate for its pkA from CA, encrypts encData under pkB,
+        signs h(payload), and sends <certA, <payload, sigA>> to B
+   - B: publishes pkB, verifies CA certificate and A's signature, checks intended
+        recipient, decrypts encData, and accepts
+*/
+
+/* Certification Authority: issues cert(name, pkX) = <name, pkX, sign(<name, pkX>, skCA)> */
+let CA(~skCA) =
+  out(pk(~skCA));                                  // publish CA public key
+  !(
+    in(<'req_cert', name, pkX>);                   // serve certificate requests
+    let cert = <name, pkX, sign(<name, pkX>, ~skCA)> in
+    event CertIssued(pk(~skCA), name, pkX);
+    out(<'cert', cert>)
+  )
+
+/* Sender A: constructs the signed and encrypted token */
+let A(~skA) =
+  let pkA = pk(~skA) in
+  in(pKB);                                         // obtain B's public key (directory)
+  out(<'req_cert', 'A', pkA>);                     // request certificate for A
+  in(<'cert', certA>);                             // receive certA = <'A', pkA, sign(<...>, skCA)>
+  new tA;                                          // timestamp
+  new rSeq; new rRand;                             // rA's sequential and random parts
+  new sgnData;                                     // non-confidential parameters
+  new encData;                                     // confidential parameters (e.g., keys)
+  event ASecret(encData);                          // mark secrecy target
+  let xenc = aenc(encData, pKB) in                 // Bp[encData]
+  let payload = <tA, <rSeq, rRand>, 'B', sgnData, xenc> in
+  let digest  = h(payload) in
+  let sigA    = sign(digest, ~skA) in              // A{Info} modeled as sign(h(Info))
+  event ASent(pkA, pKB, tA, rSeq, rRand, sgnData, encData);
+  out(<certA, <payload, sigA>>)
+
+/* Recipient B: verifies certificate and signature, checks recipient, decrypts */
+let B(~skB) =
+  let pkB = pk(~skB) in
+  out(pkB);                                        // publish B's public key
+  in(pkCA);                                        // learn CA's public key
+  in(<certA, token>);
+  let <nameA, pkA, sigCA> = certA in               // certA = <'A', pkA, sign(<'A', pkA>, skCA)>
+  if verify(sigCA, <nameA, pkA>, pkCA) = true then // verify certification path (single CA)
+  if nameA = 'A' then
+  let <payload, sigA> = token in
+  let digest = h(payload) in
+  if verify(sigA, digest, pkA) = true then         // verify A's signature on h(payload)
+  let <tA, rpair, recvB, sgnData, xenc> = payload in
+  let <rSeq, rRand> = rpair in
+  if recvB = 'B' then                              // check intended recipient
+  let encData = adec(xenc, ~skB) in                // decrypt confidential part
+  event BAccept(pkA, pkB, tA, rSeq, rRand, sgnData, encData)
+
+/* System composition:
+   - One CA with long-term key
+   - One set of long-term keys for A and B, reused across replicated sessions
+   - Optional compromise branches that leak A's or B's long-term secret keys
+*/
+process:
+  new ~skCA;
+  new ~skA; let pkA = pk(~skA) in event AKey(pkA);
+  new ~skB; let pkB = pk(~skB) in event BKey(pkB);
+  (
+      CA(~skCA)
+    | !A(~skA)
+    | !B(~skB)
+    | (event LtkRevealA(pkA); out(~skA))          // optional: leak A's signing key
+    | (event LtkRevealB(pkB); out(~skB))          // optional: leak B's decryption key
+  )
+
+/* Lemmas */
+
+/* Executability: there exists a run where B accepts a valid token. */
+lemma executable:
+  exists-trace
+  "Ex pkA pkB t rs rr s d #i.
+      BAccept(pkA, pkB, t, rs, rr, s, d) @ i"
+
+/* Secrecy: if B accepted encData and B's long-term key is not leaked, encData stays secret. */
+lemma secrecy_encData:
+  "All pkA pkB t rs rr s d #i.
+      BAccept(pkA, pkB, t, rs, rr, s, d) @ i
+      & not(Ex #r. LtkRevealB(pkB) @ r)
+      ==> not(Ex #j. K(d) @ j)"
+
+/* Authentication/non-repudiation (non-injective):
+   If B accepts and A's signing key is not leaked, then A must have sent that token earlier. */
+lemma authenticity_A_to_B:
+  "All pkA pkB t rs rr s d #i.
+      BAccept(pkA, pkB, t, rs, rr, s, d) @ i
+      & not(Ex #r. LtkRevealA(pkA) @ r)
+      ==> (Ex #j. ASent(pkA, pkB, t, rs, rr, s, d) @ j & j < i)"
+
+end

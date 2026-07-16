@@ -1,0 +1,154 @@
+theory CertPath_Token
+begin
+
+/* 
+  Model of a certification-path-based signed token from A to B.
+
+  Roles:
+  - CA: Issues certificates binding public keys to principals; publishes its public key.
+  - A (Sender): Generates a nonce rA and timestamp tA, prepares sgnData (non-confidential) 
+                and encData (confidential), encrypts encData under B's public key, signs
+                the whole Info via h(Info) using A's signing key, and sends to B:
+                <certpath B->A, A{ tA, rA, B, sgnData, Bp[encData] }>.
+  - B (Receiver): Obtains A's public key from the provided certification path, verifies the
+                  signature over the hashed Info, checks it is the intended recipient, and
+                  decrypts encData with its secret key.
+
+  Cryptographic primitives:
+  - hashing h/1
+  - signing sign/2 with verification verify/3
+  - public-key encryption aenc/2 with decryption adec/2
+
+  Intended security goals:
+  - Confidentiality: encData remains secret unless B's long-term secret key is revealed.
+  - Authentication (non-injective agreement): If B accepts a token allegedly from an honest A
+    and there is no CA compromise nor A signing-key compromise, then A must have sent that token.
+*/
+
+builtins: asymmetric-encryption, signing, hashing
+
+/* ---------------- Roles ---------------- */
+
+let CA(~skCA) =
+  let pkCA = pk(~skCA) in
+  event CAPublished(pkCA);
+  out(pkCA);
+  !(
+    in(<'reg', pKx>);
+    let cert = <pKx, sign(pKx, ~skCA)> in
+    event CertIssued(pkCA, pKx);
+    out(cert)
+  )
+
+let CAReveal(~skCA) =
+  in('revealCA');
+  event CACompromise(pk(~skCA));
+  out(~skCA)
+
+let RevealA(~skA) =
+  in('revealA');
+  event SignKeyReveal(pk(~skA));
+  out(~skA)
+
+let RevealB(~skB) =
+  in('revealB');
+  event LtkReveal(pk(~skB));
+  out(~skB)
+
+/* Sender A:
+   - obtains CA's public key and its own certificate (certpath B->A simplified as a single CA cert)
+   - learns recipient's public key pkB from the network
+   - composes Info = <tA, rA, pkB, sgnData, aenc(encData, pkB)>
+   - signs h(Info) with ~skA and sends <certA, Info, sigA>
+*/
+let A(~skA) =
+  in(pkCA);
+  out(<'reg', pk(~skA)>);
+  in(certA);
+  let <pkAfromCert, sigCA> = certA in
+  if pkAfromCert = pk(~skA) then
+  if verify(sigCA, pkAfromCert, pkCA) = true then
+  in(pkB);
+  new rA;
+  new tA;
+  new sgnData;
+  new encData;
+  let info = <tA, rA, pkB, sgnData, aenc(encData, pkB)> in
+  let sigA = sign(h(info), ~skA) in
+  event HonestA(pk(~skA));
+  event Secret(pkB, encData);
+  event TokenSent(pk(~skA), pkB, tA, rA, sgnData, encData);
+  out(<<pk(~skA), sigCA>, info, sigA>)
+
+/* Receiver B:
+   - obtains CA's public key
+   - publishes its public key so A can learn it
+   - upon receiving <certA, Info, sigA>, verifies the cert and signature, checks recipient,
+     decrypts encData, and accepts
+*/
+let B(~skB) =
+  in(pkCA);
+  out(pk(~skB));
+  event HonestB(pk(~skB));
+  in(msg);
+  let <certA, info, sigA> = msg in
+  let <pkA, certSig> = certA in
+  if verify(certSig, pkA, pkCA) = true then
+  let <tA, rA, =pk(~skB), sgnData, encToB> = info in
+  if verify(sigA, h(info), pkA) = true then
+  let encData = adec(encToB, ~skB) in
+  event AcceptB(pk(~skB), pkA, tA, rA, sgnData, encData)
+
+
+/* ---------------- System Composition ---------------- */
+
+process:
+new ~skCA;
+(
+    !CA(~skCA)
+  | CAReveal(~skCA)
+  | !(
+        new ~skA;
+        ( !A(~skA) | RevealA(~skA) )
+    )
+  | !(
+        new ~skB;
+        ( !B(~skB) | RevealB(~skB) )
+    )
+)
+
+/* ---------------- Lemmas ---------------- */
+
+/* Executability: It is possible for B to accept some token. */
+lemma executability:
+  exists-trace
+  "Ex pkA pkB t r s ed #i.
+      AcceptB(pkB, pkA, t, r, s, ed) @ i"
+
+/* Confidentiality of encData under B's public key, unless B's long-term key is revealed. */
+lemma confidentiality_encData:
+  "not(
+     Ex pkB m #i #j.
+       Secret(pkB, m) @ i
+       & K(m) @ j
+       & not(Ex #r. LtkReveal(pkB) @ r)
+   )"
+
+/* Non-injective agreement from B's point of view:
+   If B accepts a token allegedly from an honest A, then either
+   - A indeed sent that exact token earlier, or
+   - the CA was compromised, or
+   - A's signing key was revealed.
+*/
+lemma auth_B_noninj:
+  "All pkA pkB t r s ed #i.
+      ( AcceptB(pkB, pkA, t, r, s, ed) @ i
+        & (Ex #ha. HonestA(pkA) @ ha)
+      )
+    ==>
+      (Ex #j. TokenSent(pkA, pkB, t, r, s, ed) @ j & j < i)
+      | (Ex x #rca. CACompromise(x) @ rca)
+      | (Ex #ra. SignKeyReveal(pkA) @ ra)
+  "
+
+end

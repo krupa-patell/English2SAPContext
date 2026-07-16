@@ -1,0 +1,108 @@
+theory Signed_Encrypted_Token_With_CertPath
+begin
+
+builtins: asymmetric-encryption, signing, hashing
+
+functions:
+  certpath/2,
+  issuer/1,
+  subject/1
+
+equations:
+  issuer(certpath(i,s)) = i,
+  subject(certpath(i,s)) = s
+
+/* Role A (Sender/Originator):
+   - Generates fresh nonce rA and timestamp tA.
+   - Prepares sgnData (non-confidential) and encData (confidential).
+   - Encrypts encData under B's public key pKb.
+   - Forms y = <tA, rA, pKb, sgnData, c>, signs h(y) with A's secret key.
+   - Sends <certpath(pKb, pKa), y, sig>.
+*/
+let A(ltKa, pKa, pKb) =
+  new rA;
+  new tA;
+  new sgnData;
+  new encData;
+  let c = aenc(encData, pKb) in
+  let y = <tA, rA, pKb, sgnData, c> in
+  let digest = h(y) in
+  let sig = sign(digest, ltKa) in
+  event Sent(pKa, pKb, tA, rA, sgnData, c);
+  event SecretPayload(encData);
+  out(<certpath(pKb, pKa), y, sig>);
+  0
+
+/* Role B (Recipient/Verifier):
+   - Receives <path, y, sig> and parses y = <tA, rA, bname, sgnData, c>.
+   - Checks intended recipient (bname = pk(ltKb)).
+   - Extracts pKa from path (subject) and checks issuer(path) = pk(ltKb).
+   - Verifies signature using pKa, then decrypts c with ltKb to recover encData.
+   - Accepts on success.
+*/
+let B(ltKb) =
+  in(msg);
+  let <path, y, sig> = msg in
+  let <tA, rA, bname, sgnData, c> = y in
+  if bname = pk(ltKb) then
+    let pKa = subject(path) in
+    if issuer(path) = pk(ltKb) then
+      if verify(sig, h(y), pKa) = true then
+        let encData = adec(c, ltKb) in
+        event Accept(pKa, pk(ltKb), tA, rA, sgnData, encData);
+        0
+
+/* Long-term key compromise model. */
+let LtkRevealProc(s) =
+  event LtkReveal(pk(s)); out(s)
+
+/* Process:
+   - Generates long-term keys for A and B, publishes public keys.
+   - Allows optional long-term key leakage to model compromise.
+   - Runs A (needs both pKa and pKb) and B (needs only ltKb; learns pKa from path).
+*/
+process:
+!(
+  new skA; out(pk(skA));
+  !(
+    new skB; out(pk(skB));
+    (
+      LtkRevealProc(skA) | LtkRevealProc(skB)
+      |
+      ( !A(skA, pk(skA), pk(skB)) | !B(skB) )
+    )
+  )
+)
+
+/* Lemmas */
+
+/* Executability: a run exists where A sends and B accepts a matching token. */
+lemma executability:
+  exists-trace
+  "Ex a b t r sd d #i #j.
+      Sent(a, b, t, r, sd, aenc(d, b)) @ #i
+    & Accept(a, b, t, r, sd, d)        @ #j
+    & #i < #j"
+
+/* Authenticity at B:
+   If B accepts a token as coming from A with parameters (t, r, sd, d),
+   then either A previously sent a matching token containing aenc(d, b),
+   or A's long-term key was revealed. */
+lemma authenticity_B:
+  "All a b t r sd d #i.
+      Accept(a, b, t, r, sd, d) @ #i
+    ==>
+      (Ex #j. Sent(a, b, t, r, sd, aenc(d, b)) @ #j & #j < #i)
+      | (Ex #rA. LtkReveal(a) @ rA)"
+
+/* Secrecy of encData (confidential parameters):
+   If B accepted and recovered encData = d, then the adversary cannot know d
+   unless B's long-term key was revealed. */
+lemma secrecy_encData:
+  "All a b t r sd d #i.
+      Accept(a, b, t, r, sd, d) @ #i
+    ==>
+      not (Ex #j. K(d) @ #j)
+      | (Ex #rB. LtkReveal(b) @ rB)"
+
+end

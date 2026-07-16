@@ -1,0 +1,28 @@
+theory recipient_check
+begin
+
+builtins: asymmetric-encryption
+
+let Server() =
+    new ltKs;                                   // Server's long-term key
+    new sName;                                   // Server's identity
+    out(<sName, pk(ltKs)>);
+    in(xencC);
+    let <=sName, m> = adec(xencC, ltKs) in        // pattern match fails (no continuation) if not addressed to us
+    event ServerAccepted(sName, m)
+
+let Client() =
+    in(<sName, pKs>);                            // receive the intended recipient's identity + public key
+    new m;
+    let plain = <sName, m> in                    // bind the intended recipient's name into the payload
+    event ClientSent(sName, m);
+    out(aenc(plain, pKs))
+
+process:
+( !Server() | !Client() )
+
+lemma accept_exists:
+    exists-trace
+    "Ex name m #i. ServerAccepted(name, m) @ i"
+
+end

@@ -1,0 +1,113 @@
+theory CertificationPath_SignEncrypt
+begin
+
+/* 
+  Protocol: Certification-path based signed token with confidential payload
+
+  Roles:
+    - A (originator/signer): Generates a fresh nonce rA and timestamp tA,
+      prepares a token Info = <tA, rA, B, sgnData, Bp[encData]>, signs h(Info) with As,
+      and sends: (B --> A), A{Info}  where we model (B --> A) by including Ap.
+    - B (recipient/verifier): Obtains Ap from the included certification path,
+      verifies the signature on h(Info), checks that B is the intended recipient,
+      and decrypts Bp[encData] using Bs.
+
+  Cryptographic primitives:
+    - signing (sign/verify)
+    - asymmetric-encryption (aenc/adec)
+    - hashing (h)
+
+  Intended security goals:
+    - Confidentiality of encData: Only B (holding Bs) should learn encData.
+      Secrecy is conditioned on no long-term key reveal of Bs.
+    - Authentication (non-injective) of A to B on the token contents:
+      If B accepts a token, then A must have sent a matching token, unless As is compromised.
+    - Executability: There exists a trace where B successfully accepts a token.
+*/
+
+builtins: signing, asymmetric-encryption, hashing
+
+/* Role A: constructs and signs the token, and encrypts confidential part for B */
+let A(~As, pBs, pAs) =
+  new rA;                      // fresh anti-replay nonce
+  new tA;                      // timestamp (modeled as fresh)
+  new sgnData;                 // non-confidential parameters (integrity only)
+  new encData;                 // confidential parameters (to be kept secret from attacker)
+  event AGen(rA, tA);
+  event SecretForB(pBs, encData);   // mark secrecy target bound to B's public key
+  let encForB = aenc(encData, pBs) in
+  let info    = <tA, rA, pBs, sgnData, encForB> in     // include B's identity as pBs
+  let sig     = sign(h(info), ~As) in                  // A{Info} = <Info, As[h(Info)]>
+  event ASent(pAs, pBs, tA, rA, sgnData, encData);
+  // Send certification path B-->A (idealized here by including Ap = pAs), and the signed token
+  out(<'pathBA', pAs, <info, sig>>);
+  0
+
+/* Role B: verifies path to obtain Ap, checks signature and recipient, decrypts encData */
+let B(~Bs) =
+  in(msg);
+  let <'pathBA', pAsC, <info, sig>> = msg in
+  let <tA, rA, pBs_in, sgnData, encForB> = info in
+  // Check this token is addressed to B
+  if pBs_in = pk(~Bs) then
+    // Verify A's signature against the obtained Ap from the certification path
+    if verify(sig, h(info), pAsC) = true then
+      // Decrypt the confidential payload
+      let decData = adec(encForB, ~Bs) in
+      event BAccept(pAsC, pk(~Bs), tA, rA, sgnData, decData)
+    else 0
+  else 0
+
+/* Long-term key reveal hooks to model compromise */
+let LeakA(~As, pAs) =
+  event LtkReveal(pAs);
+  out(~As)
+
+let LeakB(~Bs, pBs) =
+  event LtkReveal(pBs);
+  out(~Bs)
+
+/* One-time setup: generate long-term keys for A and B, publish public parts, run roles */
+process:
+  new ~As; let pAs = pk(~As) in
+  new ~Bs; let pBs = pk(~Bs) in
+  out(pAs); out(pBs);                        // public keys are public knowledge
+  ( !A(~As, pBs, pAs)
+  | !B(~Bs)
+  | LeakA(~As, pAs)                          // optional compromise of A's signing key
+  | LeakB(~Bs, pBs)                          // optional compromise of B's decryption key
+  )
+
+/* Lemmas */
+
+/* Executability: there exists a run where B accepts a token */
+lemma executability:
+  exists-trace
+  "Ex pAs pBs tA rA sgnData v #i.
+     BAccept(pAs, pBs, tA, rA, sgnData, v) @ #i"
+
+/* Confidentiality of encData: unless B's long-term key is revealed, the attacker
+   never learns the plaintext encData designated for B. */
+lemma confidentiality_encData:
+"
+  not(
+    Ex pBs v #i #j.
+      SecretForB(pBs, v) @ #i
+      & K(v) @ #j
+      & not(Ex #r. LtkReveal(pBs) @ #r)
+  )
+"
+
+/* Authentication of A to B (non-injective):
+   If B accepts a token, then A sent a matching token earlier,
+   unless A's long-term signing key was revealed. */
+lemma authenticity_A_to_B:
+"
+  All pAs pBs tA rA sgnData v #i.
+    BAccept(pAs, pBs, tA, rA, sgnData, v) @ #i
+    ==>
+      (Ex #j. ASent(pAs, pBs, tA, rA, sgnData, v) @ #j & #j < #i)
+      | (Ex #r. LtkReveal(pAs) @ #r)
+"
+
+end

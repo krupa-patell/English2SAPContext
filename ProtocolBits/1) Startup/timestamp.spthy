@@ -1,0 +1,18 @@
+theory timestamp
+begin
+
+
+
+let Client() =
+    new ts;                      // fresh timestamp for this message
+    event ClientTimestamp(ts);    // record timestamp creation for executability lemma
+    0
+
+process:
+( !Client() )
+
+lemma timestamp_executable:
+    exists-trace
+    "Ex ts #i. ClientTimestamp(ts) @ i"
+
+end

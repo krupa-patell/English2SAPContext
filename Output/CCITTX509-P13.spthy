@@ -1,0 +1,134 @@
+theory SignedToken_CertPath
+begin
+
+/* 
+  Model of a signed token with certification path (A --> B) as described.
+
+  Roles:
+  - CA: certification authority that signs public keys (certificate path root).
+  - A (Sender): issues a token to B containing timestamp tA, nonce rA, B's identity, 
+    non-confidential parameters sgnData, and confidential encData encrypted under B's public key.
+    The whole payload is signed by A over its hash digest.
+  - B (Receiver): obtains A's public key via a certification path (verifies a CA signature on pkA),
+    verifies A's signature over the payload, checks intended recipient field (pkB),
+    and decrypts encData using skB.
+
+  Cryptographic primitives:
+  - asymmetric-encryption: aenc/adec under pk(sk)
+  - signing: sign/verify using pk(sk)
+  - hashing: h/1 for hashing the payload prior to signing
+
+  Intended security goals:
+  - Executability: an honest run where B accepts a token is possible.
+  - Secrecy of encData: if A prepares encData for B, the attacker cannot learn encData unless B's long-term key is revealed.
+  - Origin authentication (non-injective): if B accepts a token (and A's key is not revealed), 
+    then some A issued exactly that token earlier (agreement on all payload fields).
+*/
+
+builtins: asymmetric-encryption, signing, hashing
+
+/* Certification Authority: signs public keys to form certificates. */
+let CA(~skCA) =
+  !(
+    in(req);
+    let <'csr', pka> = req in
+    let certA = sign(pka, ~skCA) in
+    event CertIssued(pk(~skCA), pka);
+    out(<'cert', pka, certA>)
+  )
+
+/* Sender A: constructs and signs the token for B, and includes its certificate. */
+let A(~skA, pkB, pkCA) =
+  /* Obtain (or build) a certification path to A: request CA to certify pkA. */
+  out(<'csr', pk(~skA)>);
+  in(certMsg);
+  let <'cert', pka2, certA> = certMsg in
+  if pka2 = pk(~skA) then
+  if verify(certA, pka2, pkCA) = true then
+    /* Build token content */
+    new tA;                         // timestamp placeholder
+    new seqA; new rndA;             // sequential and random parts
+    let rA = <seqA, rndA> in        // combined nonce with sequential part
+    new sgnData;                    // non-confidential parameters
+    new encData;                    // confidential parameters (e.g., secret key material)
+    let encForB = aenc(encData, pkB) in
+    let payload = <tA, rA, pkB, sgnData, encForB> in
+    let digest  = h(payload) in
+    let sigA    = sign(digest, ~skA) in
+    event TokenIssued(pk(~skA), pkB, tA, rA, sgnData, encData);
+    event SecretFor(pkB, encData);  // secrecy goal parameterized by intended recipient pkB
+    /* Send certification path element (certA), payload, and signature */
+    out(<'path', pk(~skA), certA, payload, sigA>)
+
+/* Receiver B: verifies the certification path and signature, checks recipient, and decrypts encData. */
+let B(~skB, pkB, pkCA) =
+  in(msg);
+  let <'path', pkA, certA, payload, sigA> = msg in
+  /* (3a) obtain and verify Ap from certification path (here: a single CA cert) */
+  if verify(certA, pkA, pkCA) = true then
+    let digest = h(payload) in
+    /* (3b) verify A's signature over the hashed payload */
+    if verify(sigA, digest, pkA) = true then
+      /* (3c) check that B is the intended recipient and (3d) timestamp current (abstracted) */
+      let <tA, rA, recB, sgnData, encForB> = payload in
+      if recB = pkB then
+        /* (confidentiality) decrypt the confidential part for B */
+        let ed = adec(encForB, ~skB) in
+        let <seqPart, rndPart> = rA in
+        /* (3e) optionally store sequential part with tA and hashed token */
+        event RecordSeq(tA, seqPart, digest);
+        event TokenAccepted(pkA, pkB, tA, rA, sgnData, ed)
+
+/* Optional long-term key reveal to model compromise. */
+let LtkReveal(s) =
+  event LtkReveal(pk(s)); out(s)
+
+/* One-time CA setup and unbounded sessions of A and B. */
+process:
+!(
+  new ~skCA; out(pk(~skCA)); event CAInit(pk(~skCA));
+  (
+    !CA(~skCA)
+  |
+    !(
+      new ~skA; out(pk(~skA));
+      new ~skB; out(pk(~skB));
+      (
+          A(~skA, pk(~skB), pk(~skCA))
+        | B(~skB, pk(~skB), pk(~skCA))
+        | LtkReveal(~skA)
+        | LtkReveal(~skB)
+      )
+    )
+  )
+)
+
+/* Lemmas */
+
+/* Sanity: CA setup is reachable. */
+lemma ca_setup_executable:
+  exists-trace
+  "Ex pkCA #i. CAInit(pkCA) @ i"
+
+/* Executability: an honest run where B accepts a token exists. */
+lemma executability:
+  exists-trace
+  "Ex pkA pkB t r s e #i.
+     TokenAccepted(pkA, pkB, t, r, s, e) @ i"
+
+/* Secrecy of encData intended for pkB, unless pkB's long-term key is revealed. */
+lemma secrecy_encData_for_B:
+  "All pkB e #i.
+      SecretFor(pkB, e) @ i
+      ==> not (Ex #j. K(e) @ j)
+          | (Ex #r. LtkReveal(pkB) @ r)"
+
+/* Origin authentication at B: if B accepts and A's key is not revealed, then some A issued the same token earlier. */
+lemma origin_authentication_B:
+  "All pkA pkB t r s e #i.
+      TokenAccepted(pkA, pkB, t, r, s, e) @ i
+      ==>
+        (Ex #j. TokenIssued(pkA, pkB, t, r, s, e) @ j & j < i)
+        | (Ex #r. LtkReveal(pkA) @ r)"
+
+end
