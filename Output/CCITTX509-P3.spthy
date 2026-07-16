@@ -1,0 +1,69 @@
+theory Signed_Token_With_CertPath
+begin
+
+builtins: asymmetric-encryption, signing, hashing
+
+/* Roles:
+   - A (sender): creates a fresh timestamp tA, nonce rA, non-confidential sgnData, and confidential encData.
+                 It encrypts encData to B under B's public key and signs the whole bundle (hashed) with A's secret key.
+                 Sends: < (B->A certification path placeholder), y, sigA >
+                 where y = <tA, rA, B_id, sgnData, aenc(encData, pkB)> and B_id = pk(~skB) in this model.
+   - B (receiver): verifies the signature using A's public key from the published key, checks intended recipient,
+                   decrypts encData with B's secret key, and accepts.
+*/
+
+/* Sender A */
+let A(~skA, pKb) =
+  new tA;                            // timestamp/validity tag (abstract)
+  new rA;                            // anti-replay nonce (sequential part abstracted)
+  new sgnData;                       // non-confidential parameters
+  new encData;                       // confidential parameters (e.g., a session key)
+  let c = aenc(encData, pKb) in      // Bp[encData]
+  let y = <tA, rA, pKb, sgnData, c> in    // include intended recipient = B's identity (here pKb)
+  let sigA = sign(h(y), ~skA) in     // A{y} = y, As[h(y)]
+  let pathBA = <'B_to_A', pk(~skA), pKb> in    // certification path placeholder carried along
+  event RunningA(pk(~skA), pKb, tA, rA, sgnData, encData);
+  event Secret(encData);
+  out(<pathBA, y, sigA>)
+
+/* Receiver B */
+let B(~skB, pKa) =
+  in(M);
+  let <pathBA, y, sigA> = M in
+  let <tA, rA, intended, sgnData, c> = y in
+  if intended = pk(~skB) then                  // (c) check intended recipient is B
+    if verify(sigA, h(y), pKa) = true then     // (a)(b) obtain Ap and verify signature/integrity
+      let encData = adec(c, ~skB) in           // decrypt confidential parameters
+      // (d)(e) timestamp recency and replay tracking abstracted; could be recorded here
+      event AcceptB(pKa, pk(~skB), tA, rA, sgnData, encData)
+    else 0
+  else 0
+
+process:
+!(
+  // Long-term key generation and publication for both parties
+  new ~skA; out(pk(~skA));
+  new ~skB; out(pk(~skB));
+  // Concurrent sessions of A and B using each other's public keys
+  ( !A(~skA, pk(~skB)) | !B(~skB, pk(~skA)) )
+)
+
+//// Lemmas ////
+
+// Sanity: an accepting run at B is executable
+lemma executable:
+  exists-trace
+  "Ex pKa pKb t r sd m #i.
+     AcceptB(pKa, pKb, t, r, sd, m) @ i"
+
+// Confidentiality of encData (the confidential parameters) as sent by A
+lemma secrecy_encData:
+  "All m #i. Secret(m) @ i ==> not (Ex #j. K(m) @ j)"
+
+// Non-injective agreement: if B accepts, then some A previously issued a matching token
+lemma auth_B_ni:
+  "All pKa pKb t r sd m #i.
+     AcceptB(pKa, pKb, t, r, sd, m) @ i
+     ==> (Ex #j. RunningA(pKa, pKb, t, r, sd, m) @ j & j < i)"
+
+end

@@ -1,0 +1,113 @@
+theory CertificationPath_TokenAuth_P
+begin
+
+/* Model of a signed-and-encrypted token with a certification path hint.
+   - A generates a fresh timestamp tA and a fresh nonce rA = <seq,rand>.
+   - A prepares Info = <tA, rA, pkB, sgnData, aenc(encData, pkB)>.
+   - A signs the hash of Info and sends <'certpath_B_to_A', pkA, Info, SigA>.
+   - B verifies the signature using pkA, checks that pkB matches itself,
+     and decrypts encData using skB.
+   Security goals:
+     * Executability (a run exists).
+     * Secrecy of encData unless B’s long-term key is revealed.
+     * Authentication: if B accepts a token allegedly from pkA, then A sent it,
+       unless A’s long-term key is revealed (captures non-repudiation/origin auth).
+     * A does not reuse (tA,rA) (fresh-token uniqueness).
+*/
+
+builtins: asymmetric-encryption, signing, hashing
+
+/* Roles */
+
+let A(~skA, pkA, pkB) =
+  /* Fresh anti-replay material and data */
+  new ~seq; new ~rand;
+  let rA = <~seq, ~rand> in
+  new tA;
+  new sgnData;
+  new encData;
+
+  /* Build info and signature: X{Info} = Info, Xs[h(Info)] */
+  let Info = <tA, rA, pkB, sgnData, aenc(encData, pkB)> in
+  let SigA = sign(h(Info), ~skA) in
+
+  /* Record that A created and sent this token and intends encData to be secret to B */
+  event SentToken(pkA, pkB, tA, rA, sgnData, encData);
+  event UniqueToken(pkA, tA, rA);
+  event SecretEncData(pkB, encData);
+
+  /* Send: certification path placeholder + pkA + Info + SigA */
+  out(<'certpath_B_to_A', pkA, Info, SigA>)
+
+
+let B(~skB, pkB) =
+  in(msg);
+  let <cp_hint, pkA, Info, SigA> = msg in
+  let <tA, rA, =pkB, sgnData, xenc> = Info in
+  /* Verify signature over hash(Info) using pkA obtained via the path; then decrypt */
+  if verify(SigA, h(Info), pkA) = true then
+    let encData = adec(xenc, ~skB) in
+    event Accept(pkA, pkB, tA, rA, sgnData, encData)
+
+
+/* Compromise primitives: long-term key reveals */
+let LtkRevealA(~skA) =
+  event LtkReveal(pk(~skA)); out(~skA)
+
+let LtkRevealB(~skB) =
+  event LtkReveal(pk(~skB)); out(~skB)
+
+
+/* System composition:
+   - Spawn many A and B sessions under long-term keys.
+   - Publicly release public keys.
+   - Allow potential long-term key compromise branches.
+*/
+process:
+!(
+  new ~skA; let pkA = pk(~skA) in out(pkA);
+  !(
+    new ~skB; let pkB = pk(~skB) in out(pkB);
+    (
+        !A(~skA, pkA, pkB)
+      | !B(~skB, pkB)
+      | LtkRevealA(~skA)
+      | LtkRevealB(~skB)
+    )
+  )
+)
+
+
+/* Lemmas */
+
+/* Sanity: an execution exists where B accepts a token sent by A. */
+lemma executability:
+  exists-trace
+  "Ex pkA pkB tA rA sgnData encData #i #j.
+      SentToken(pkA, pkB, tA, rA, sgnData, encData) @ #i
+    & Accept(pkA, pkB, tA, rA, sgnData, encData) @ #j
+    & #i < #j"
+
+/* Secrecy: encData remains secret unless B's long-term key is revealed. */
+lemma secrecy_encData:
+  "All pkB encData #i.
+      SecretEncData(pkB, encData) @ #i
+    ==> not (Ex #j. K(encData) @ #j)
+        | (Ex #r. LtkReveal(pkB) @ #r)"
+
+/* Authentication / non-repudiation-style: if B accepts, A must have sent it,
+   unless A's long-term key was revealed. */
+lemma auth_B_from_A:
+  "All pkA pkB tA rA sgnData encData #i.
+      Accept(pkA, pkB, tA, rA, sgnData, encData) @ #i
+    ==> (Ex #j. SentToken(pkA, pkB, tA, rA, sgnData, encData) @ #j & #j < #i)
+        | (Ex #r. LtkReveal(pkA) @ #r)"
+
+/* A's anti-replay token uniqueness: A never reuses the same (tA, rA). */
+lemma A_token_uniqueness:
+  "All pkA pkB tA rA s1 e1 s2 e2 #i #j.
+      SentToken(pkA, pkB, tA, rA, s1, e1) @ #i
+    & SentToken(pkA, pkB, tA, rA, s2, e2) @ #j
+    ==> #i = #j"
+
+end

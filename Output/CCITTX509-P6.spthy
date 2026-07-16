@@ -1,0 +1,99 @@
+theory CertPath_SignedToken
+begin
+
+/* Model: Signed token with certification path (A --> B)
+   Roles:
+     - CA: issues certificates binding identities to public keys.
+     - A (Sender): verifies B's certificate, creates a signed token A{Info} = <Info, As[h(Info)]>
+                   where Info = <tA, rA, 'B', sgnData, Bp[encData]>; sends it with a certification path B->A.
+     - B (Receiver): validates certification path to obtain Ap, verifies A's signature over Info,
+                     checks intended recipient, decrypts encData with its private key, and records replay state.
+   Primitives:
+     - Public-key encryption: aenc(m, pkX)/adec(., Xs).
+     - Digital signatures: sign(m, Xs) with verification verify(sig, m, Xp) = true.
+     - Hashing: h(.), used inside signatures (sign over h(Info)).
+   Goals:
+     - Executability: a run exists where B accepts a token.
+     - Secrecy: encData remains secret unless B's long-term key is revealed.
+     - Authentication (non-injective, B's viewpoint): if B accepts, then A previously sent a matching token,
+       unless A's long-term key was revealed. */
+
+builtins: asymmetric-encryption, signing, hashing
+
+/* Sender A: creates and signs the token, attaches a certification path enabling B to obtain Ap. */
+let ARole(~skA, pkB, pkCA, certB, certA) =
+  /* Verify B's certificate under the trusted CA key. */
+  let <'Cert', 'B', =pkB, sigB> = certB in
+  if verify(sigB, <'B', pkB>, pkCA) = true then
+    new tA;                             // timestamp/freshness indicator
+    new rRand; new rSeq;                // rA = <random, sequential-part>
+    let rA = <rRand, rSeq> in
+    new sgnData;                        // non-confidential, integrity-protected
+    new encData;                        // confidential payload (e.g., a session key)
+    let xenc = aenc(encData, pkB) in    // Bp[encData]
+    let info = <tA, rA, 'B', sgnData, xenc> in
+    let hinfo = h(info) in
+    let sigTok = sign(hinfo, ~skA) in   // A{Info} implemented as <Info, As[h(Info)]>
+    let pathBA = certA in               // certification path B->A (here: A's cert by CA)
+    event ASent(pk(~skA), pkB, tA, rSeq, sgnData, encData);
+    out(<'PathBA', pathBA, <info, sigTok>>)
+
+/* Receiver B: validates certification path, verifies A's signature, checks recipient and freshness,
+   decrypts the confidential part, and records replay state. */
+let BRole(~skB, pkCA) =
+  in(msg);
+  let <'PathBA', certA, <info, sigTok>> = msg in
+  let <'Cert', 'A', pkA, sigA> = certA in
+  if verify(sigA, <'A', pkA>, pkCA) = true then          // obtain/validate Ap from the path using trusted pkCA
+    let <tA, rA, recp, sgnData, xenc> = info in
+    if recp = 'B' then                                   // ensure B is the intended recipient
+      let hinfo = h(info) in
+      if verify(sigTok, hinfo, pkA) = true then          // verify A's signature over Info
+        let <rRand1, rSeq> = rA in
+        let encData = adec(xenc, ~skB) in                // decrypt Bp[encData]
+        event Store('B', tA, rSeq, hinfo);               // B stores (tA, seq, hash) to detect replays within tA
+        event BAccept(pkA, pk(~skB), tA, rSeq, sgnData, encData)
+
+/* Optional long-term key compromise (for security-conditioned lemmas). */
+let LtkCompromise(sk) =
+  event LtkReveal(pk(sk)); out(sk)
+
+/* Setup:
+   - CA generates a root key and certifies A and B.
+   - Publish pkCA, pkA, pkB, and their certificates.
+   - Run unbounded sessions of A and B with fixed long-term keys.
+   - Allow optional long-term key reveals. */
+process:
+  new ~skCA; out(pk(~skCA));
+  new ~skA;  out(pk(~skA));
+  new ~skB;  out(pk(~skB));
+  let certA = <'Cert', 'A', pk(~skA), sign(<'A', pk(~skA)>, ~skCA)> in
+  let certB = <'Cert', 'B', pk(~skB), sign(<'B', pk(~skB)>, ~skCA)> in
+  out(certA); out(certB);
+  (
+      !ARole(~skA, pk(~skB), pk(~skCA), certB, certA)
+    | !BRole(~skB, pk(~skCA))
+    | LtkCompromise(~skA)
+    | LtkCompromise(~skB)
+  )
+
+/* Executability: there exists a run where B accepts a token. */
+lemma executable:
+  exists-trace
+  "Ex Ap Bp t seq sgn x #i. BAccept(Ap, Bp, t, seq, sgn, x) @ i"
+
+/* Secrecy of encData: the confidential payload remains secret unless B's LTK was revealed earlier. */
+lemma encData_secrecy:
+  "All Ap Bp t seq sgn x #i.
+      BAccept(Ap, Bp, t, seq, sgn, x) @ i
+    ==> (not (Ex #j. K(x) @ j)) | (Ex #r. LtkReveal(Bp) @ r & r < i)"
+
+/* Authentication (B's viewpoint, non-injective): if B accepts, A must have sent a matching token,
+   unless A's long-term key was revealed earlier. */
+lemma auth_B_noninj:
+  "All Ap Bp t seq sgn x #i.
+      BAccept(Ap, Bp, t, seq, sgn, x) @ i
+    ==> (Ex #j. ASent(Ap, Bp, t, seq, sgn, x) @ j & j < i)
+        | (Ex #r. LtkReveal(Ap) @ r & r < i)"
+
+end

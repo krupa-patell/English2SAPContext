@@ -1,0 +1,118 @@
+theory Certification_Path_Token
+begin
+
+/* Modeled protocol:
+   - Roles: A (sender/originator), B (receiver/recipient), CA (certification authority).
+   - Primitives: hashing (h), digital signatures (sign/verify), public-key encryption (aenc/adec).
+   - Message from A to B:
+       < 'path', <pkA, certA>, 'msg1', info, sigA >
+     where:
+       pkA   = pk(skA) (A's public key),
+       certA = sign(pkA, skCA) (certificate by CA over pkA),
+       info  = <tA, rA, pkB, sgnData, aenc(encData, pkB)>,
+       sigA  = sign(h(info), skA) (A signs the hash of info).
+   - B verifies the CA certificate, checks intended recipient, verifies A's signature,
+     and decrypts the confidential payload.
+
+   Security goals:
+   - Confidentiality of encData: encData remains secret unless B's long-term key is revealed.
+   - Authentication (B's viewpoint, non-injective): If an honest B accepts, then some A sent
+     a matching token, unless A's long-term key is revealed.
+*/
+
+builtins: hashing, signing, asymmetric-encryption
+
+// Role A: constructs a signed token containing non-confidential sgnData and
+// confidential encData encrypted for B. Includes a certification path (CA->A).
+let A(skA, pkB, pkCA) =
+  in(certA);                                        // obtain A's certificate (public information)
+  if verify(certA, pk(skA), pkCA) = true then       // check CA's signature on A's public key
+    new rA;                                         // replay/freshness guard
+    new tA;                                         // timestamp (modeled as fresh)
+    new sgnData;                                    // non-confidential parameters
+    new encData;                                    // confidential parameters (intended to remain secret)
+    let info = <tA, rA, pkB, sgnData, aenc(encData, pkB)> in
+    let sigA = sign(h(info), skA) in                // A{Info} = Info, As[h(Info)]
+    event Token(pk(skA), pkB, tA, rA, sgnData, encData);
+    event SecretData(encData);
+    out(<'path', <pk(skA), certA>, 'msg1', info, sigA>)
+
+// Role B: verifies the certification path and A's signature, checks intended recipient,
+// and decrypts the confidential payload.
+let B(skB, pkCA) =
+  in(m);
+  let <'path', <pkA, certA>, 'msg1', info, sigA> = m in
+  if verify(certA, pkA, pkCA) = true then           // validate cert: pkA signed by CA
+    let <tA, rA, pkB_in, sgnData, xenc> = info in
+    if pkB_in = pk(skB) then                        // ensure B is the intended recipient
+      if verify(sigA, h(info), pkA) = true then     // verify origin authentication & integrity
+        let encData = adec(xenc, skB) in            // recover confidential parameters
+        event AcceptB(pkA, pk(skB), tA, rA, sgnData, encData)
+      else 0
+    else 0
+  else 0
+
+// CA: issues certificates binding agents' public keys. The CA's public key is the trust anchor.
+let CA(skCA) =
+  out(pk(skCA));                                   // publish CA trust anchor
+  !(
+    in(pkA);                                       // receive a public key to certify
+    let certA = sign(pkA, skCA) in
+    out(certA)                                     // publish its certificate
+  )
+
+// Compromise actions (long-term key reveals)
+let CompromiseA(skA) = event LtkRevealA(pk(skA)); out(skA)
+let CompromiseB(skB) = event LtkRevealB(pk(skB)); out(skB)
+let CompromiseCA(skCA) = event CAReveal(pk(skCA)); out(skCA)
+
+// Orchestrate many As and Bs, anchored by one CA.
+process:
+new ~skCA;
+(
+  !CA(~skCA)
+  |
+  !(
+    new skA; out(pk(skA)); event HonestA(pk(skA));
+    new skB; out(pk(skB)); event HonestB(pk(skB));
+    (
+      !A(skA, pk(skB), pk(~skCA))
+      | !B(skB, pk(~skCA))
+      | (CompromiseA(skA))
+      | (CompromiseB(skB))
+      | (CompromiseCA(~skCA))
+    )
+  )
+)
+
+// Executability: some run where B accepts a token sent by A.
+lemma executability:
+  exists-trace
+  "Ex pkA pkB t r s e #i #j.
+      Token(pkA, pkB, t, r, s, e) @ #i
+    & AcceptB(pkA, pkB, t, r, s, e) @ #j
+    & #i < #j"
+
+// Confidentiality of encData: encData remains secret unless B's long-term key is revealed.
+lemma encData_secrecy:
+  "not(
+     Ex pkA pkB t r s e #i #j.
+        Token(pkA, pkB, t, r, s, e) @ #i
+      & K(e) @ #j
+      & not(Ex #rB. LtkRevealB(pkB) @ #rB)
+   )"
+
+// Authentication (B's viewpoint, non-injective):
+// If an honest B accepts a token claimed to be from an honest A,
+// then some matching token was sent by that A, unless A's key was revealed.
+lemma auth_B_noninjective:
+  "All pkA pkB t r s e #i.
+      AcceptB(pkA, pkB, t, r, s, e) @ #i
+    & (Ex #hA. HonestA(pkA) @ #hA)
+    & (Ex #hB. HonestB(pkB) @ #hB)
+    ==>
+       (Ex #j. Token(pkA, pkB, t, r, s, e) @ #j & #j < #i)
+     | (Ex #rA. LtkRevealA(pkA) @ #rA)
+  "
+
+end

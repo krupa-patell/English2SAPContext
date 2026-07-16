@@ -1,0 +1,104 @@
+theory SignedToken_With_CertPath
+begin
+
+/* Roles and intuition:
+   - A (Sender): creates a token containing public parameters (tA, rA, B, sgnData)
+     and a confidential part for B (encData), here modeled as a fresh session key k,
+     encrypted under B's public encryption key pkB. A signs the hash of the entire
+     Info tuple and attaches a "certification path" B->A carrying A's public key.
+   - B (Receiver): obtains A's public key from the provided path, verifies the
+     signature on the Info, checks the intended recipient field equals its own pk,
+     decrypts the confidential part with its private key, and accepts.
+
+   Cryptographic primitives:
+   - hashing: h/1
+   - signatures: sign/2 and verify/3 (signing builtins)
+   - public-key encryption: aenc/2 and adec/2 (asymmetric-encryption builtins)
+
+   Intended security goals:
+   - Secrecy of the confidential parameter k unless B's long-term decryption key is revealed.
+   - Origin authentication / non-repudiation flavor: if B accepts a token as from A,
+     then A previously issued a matching token, unless A's long-term signing key was revealed.
+
+   Notation mapping:
+   - A{Info} is modeled as the pair <Info, sign(h(Info), skA)>.
+   - Bp[encData] is modeled as aenc(encData, pkB).
+   - The "certification path B -> A" is abstracted as a tag carrying pkA: <'pathBA', pkA>.
+*/
+
+builtins: hashing, signing, asymmetric-encryption
+
+/* Sender A: signs hash(Info) and includes cert path B->A along with the signed token */
+let A(skA, pkB) =
+  new rA;                   // fresh nonce to prevent replay/forgery
+  new tA;                   // timestamp abstraction
+  new sgnData;              // non-confidential parameters
+  new k;                    // confidential parameter (e.g., a session key)
+  let enc    = aenc(k, pkB) in
+  let info   = <tA, rA, pkB, sgnData, enc> in            // Info = (tA, rA, B, sgnData, Bp[encData])
+  let H      = h(info) in
+  let sig    = sign(H, skA) in                           // A{Info} = <Info, sign(h(Info), skA)>
+  let pathBA = <'pathBA', pk(skA)> in                    // abstract certification path B -> A
+  event TokenIssued(pk(skA), pkB, tA, rA, sgnData, k);   // record issuance for authentication lemmas
+  event SecretK(k);                                      // track confidential parameter
+  out(<pathBA, <info, sig>>)
+
+/* Receiver B: verifies cert path, signature, recipient, and decrypts encData */
+let B(skB, pkB) =
+  in(msg);
+  let <<'pathBA', pkA>, <info, sig>> = msg in
+  let <tA, rA, rec, sgnData, enc> = info in
+  if rec = pkB then                              // check intended recipient is B
+    let H = h(info) in
+    if verify(sig, H, pkA) = true then           // verify A's signature on Info
+      let k = adec(enc, skB) in                  // decrypt confidential parameters
+      event AcceptB(pkA, pkB, tA, rA, sgnData, k)
+
+/* Key compromise branches (optional, for conditional security lemmas) */
+let CompromiseA(skA) =
+  event LtkRevealA(pk(skA)); out(skA)
+
+let CompromiseB(skB) =
+  event LtkRevealB(pk(skB)); out(skB)
+
+/* System composition:
+   - A has a long-term signing key skA (used only for signatures).
+   - B has a long-term decryption key skB (used only for public-key encryption).
+   - Public keys are published; compromise branches allow key leakage to the adversary. */
+process:
+!(
+  new skA; out(pk(skA)); event HonestA(pk(skA));
+  !(
+    new skB; out(pk(skB)); event HonestB(pk(skB));
+    (
+        !A(skA, pk(skB))
+      | !B(skB, pk(skB))
+      | CompromiseA(skA)
+      | CompromiseB(skB)
+    )
+  )
+)
+
+/* Executability: there exists a run where B accepts A's token */
+lemma executability:
+  exists-trace
+  "Ex pkA pkB t r s k #i #j.
+      TokenIssued(pkA, pkB, t, r, s, k) @ #j
+    & AcceptB(pkA, pkB, t, r, s, k) @ #i
+    & #j < #i"
+
+/* Secrecy of k: if B accepts, then k is not revealed unless B's decryption key is leaked */
+lemma secrecy_of_k:
+  "All pkA pkB t r s k #i.
+      AcceptB(pkA, pkB, t, r, s, k) @ #i
+      ==> (not (Ex #j. K(k) @ #j)) | (Ex #rB. LtkRevealB(pkB) @ #rB)"
+
+/* Origin authentication / non-repudiation-style: B's acceptance implies A issued,
+   unless A's signing key was compromised. */
+lemma origin_authentication:
+  "All pkA pkB t r s k #i.
+      AcceptB(pkA, pkB, t, r, s, k) @ #i
+      ==> (Ex #j. TokenIssued(pkA, pkB, t, r, s, k) @ #j & #j < #i)
+          | (Ex #rA. LtkRevealA(pkA) @ #rA)"
+
+end

@@ -1,0 +1,32 @@
+theory hash_then_sign
+begin
+
+/* Server signs the hash of a message rather than the message itself
+   (hash-then-sign): sig = sign(h(m), ltKs). Client recomputes h(m) and
+   checks the signature against the digest. Contrast with
+   signature_generation_verification.spthy, which signs the raw message
+   directly. */
+
+builtins: signing, hashing
+
+let Server() =
+    new ltKs;
+    new m;
+    let digest = h(m) in
+    event ServerSign(pk(ltKs), m);
+    out(<pk(ltKs), m, sign(digest, ltKs)>)
+
+let Client() =
+    in(<pKs, m, sig>);
+    let digest = h(m) in
+    if verify(sig, digest, pKs) = true then
+        event ClientVerify(pKs, m)
+
+process:
+( !Server() | !Client() )
+
+lemma verify_exists:
+    exists-trace
+    "Ex pKs m #i. ClientVerify(pKs, m) @ #i"
+
+end

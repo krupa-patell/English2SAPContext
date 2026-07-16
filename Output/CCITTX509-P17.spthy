@@ -1,0 +1,117 @@
+theory CertificationPath_Token_P
+begin
+
+builtins: asymmetric-encryption, signing, hashing
+
+functions:
+  id/1   // abstract identity binding to a public key
+
+/* Roles:
+   - CA: Root certification authority that signs certificates binding identities to public keys.
+   - A  (Sender/Originator): Registers for a certificate, then sends a signed token to B containing:
+        tA (timestamp), rA (fresh nonce with sequential part), B's identity, non-confidential sgnData,
+        and confidential encData encrypted under B's public key.
+   - B  (Recipient/Verifier): Publishes its public key and identity, receives A's message, retrieves A's public key
+        via the CA-signed certificate, verifies signature and fields, decrypts confidential data, and accepts.
+
+   Message (A -> B):
+     < certA = <<'cert', idA, pkA>, sigCA>,
+       payload = <'TA', tA, 'RA', rA, 'B', idB, 'SGN', sgnData, 'ED', aenc(< 'kconf', kconf >, pkB)>,
+       sig = sign(h(payload), skA) >
+
+   Security goals:
+     - Confidentiality of kconf (encData) against the adversary unless B's private key is compromised.
+     - Origin authentication (non-injective agreement): If B accepts a token, then either A sent it or
+       A's signing key was compromised.
+*/
+
+let CA(~skCA) =
+  // Publish the CA's public key and issue certificates on request
+  out(pk(~skCA));
+  !(
+    in(<'Reg', idA, pkA>);                            // A's registration request
+    let cm   = <'cert', idA, pkA> in
+    let sigC = sign(cm, ~skCA) in                     // simple cert: signature over the binding
+    event CACert(idA, pkA);
+    out(<cm, sigC>)                                   // certA = <<'cert', idA, pkA>, sigC>
+  )
+
+let A(~skA, pkCA) =
+  // Register and obtain a certificate for pkA from the CA, then send a signed token to B
+  let pkA = pk(~skA) in
+  let idA = id(pkA) in
+  out(<'Reg', idA, pkA>);
+  in(certA);
+  let <<'cert', =idA, =pkA>, sigCA> = certA in
+  if verify(sigCA, <'cert', idA, pkA>, pkCA) = true then
+    // Discover B's public key and identity (published by B)
+    in(<'Peer', idB, pkB>);
+    // Construct token
+    new tA;                 // timestamp/freshness indicator
+    new rA;                 // fresh, non-repeating number (with an implied sequential part)
+    new sgnData;            // non-confidential parameters (visible in clear)
+    new kconf;              // confidential parameter (e.g., session key or secret)
+    let encData = aenc(<'kconf', kconf>, pkB) in
+    let payload = <'TA', tA, 'RA', rA, 'B', idB, 'SGN', sgnData, 'ED', encData> in
+    let sig     = sign(h(payload), ~skA) in            // X{Info} = Info, Xs[h(Info)]
+    event TokenSent(pkA, pkB, tA, rA, sgnData, kconf);
+    event Secret(kconf);
+    out(<certA, payload, sig>)
+
+let B(~skB, pkCA) =
+  // Publish identity and public key; receive, verify and accept A's token
+  let pkB = pk(~skB) in
+  let idB = id(pkB) in
+  out(<'Peer', idB, pkB>);                            // available for senders to target this recipient
+  in(msg);
+  let <certA, payload, sig> = msg in
+  let <<'cert', idA, pkA>, sigCA> = certA in
+  if verify(sigCA, <'cert', idA, pkA>, pkCA) = true then
+    let <'TA', tA, 'RA', rA, 'B', idB2, 'SGN', sData, 'ED', encData> = payload in
+    if idB2 = idB then                                 // intended recipient check
+      if verify(sig, h(payload), pkA) = true then       // signature verification on hashed payload
+        let <'kconf', kconf> = adec(encData, ~skB) in   // decrypt confidential parameters
+        // Timestamp and anti-replay checks (abstracted here as comments; could be modeled with events/guards):
+        // - Check "current" tA
+        // - Optionally log/store <tA, rA> for uniqueness within validity window
+        event Accept(pkA, pkB, tA, rA, sData, kconf);
+        event ReceivedConfidential(kconf)
+
+let LtkRevealProc(s) =
+  // Long-term key compromise (used to condition lemmas)
+  event LtkReveal(pk(s)); out(s)
+
+process:
+new ~skCA;
+(
+    !CA(~skCA)
+  | !(
+        new ~skA; out(pk(~skA));
+        ( !A(~skA, pk(~skCA)) | LtkRevealProc(~skA) )
+    )
+  | !(
+        new ~skB; out(pk(~skB));
+        ( !B(~skB, pk(~skCA)) | LtkRevealProc(~skB) )
+    )
+)
+
+lemma executable:
+  exists-trace
+  "Ex pkA pkB t r sd k #i.
+     Accept(pkA, pkB, t, r, sd, k) @ #i"
+
+lemma confidentiality_encData:
+  "All pkA pkB t r sd k #i.
+     Accept(pkA, pkB, t, r, sd, k) @ #i
+     ==> not (Ex #j. K(k) @ #j)
+         | (Ex #rB. LtkReveal(pkB) @ #rB)
+  "
+
+lemma origin_authentication_noninj:
+  "All pkA pkB t r sd k #i.
+     Accept(pkA, pkB, t, r, sd, k) @ #i
+     ==> (Ex #j. TokenSent(pkA, pkB, t, r, sd, k) @ #j & #j < #i)
+         | (Ex #rA. LtkReveal(pkA) @ #rA)
+  "
+
+end
