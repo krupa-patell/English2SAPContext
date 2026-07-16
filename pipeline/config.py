@@ -11,6 +11,7 @@ INPUT_DIR = ROOT_DIR / "Input"
 OUTPUT_DIR = ROOT_DIR / "Output"
 NAMING_CONVENTIONS_FILE = ROOT_DIR / "NamingConventions.md"
 PROMPT_FRAMEWORK_FILE = ROOT_DIR / "PromptFramework.md"
+BUILTIN_RULES_FILE = ROOT_DIR / "Builtin-Selection-Rules.md"
 
 # --- LLM settings ------------------------------------------------------------
 # Reads OPENAI_API_KEY from the environment (standard openai SDK behavior).
