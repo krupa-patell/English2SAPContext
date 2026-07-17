@@ -1,4 +1,5 @@
 theory CSKB_V1
+// example.txt from Benchmark
 begin
 
 builtins: asymmetric-encryption

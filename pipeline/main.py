@@ -71,19 +71,21 @@ def run_pipeline(name: str, description: str) -> bool:
             )
             continue
 
-        print(f"[{name}] attempt {attempt}: validating with tamarin-prover...")
+        print(f"[{name}] attempt {attempt}: compiling with tamarin-prover...")
         result = validate_spthy(code)
         record["code"] = code
         record["valid"] = result.ok
         if not result.ok:
+            record["failed_stage"] = result.stage
             record["tamarin_output"] = result.output
         log["attempts"].append(record)
 
         if result.ok:
             success = True
             break
-        print(f"[{name}] attempt {attempt}: parse failed, asking model to repair...")
-        prompt = build_repair_prompt(result.output)
+        print(f"[{name}] attempt {attempt}: {result.stage} stage failed, "
+              "asking model to repair...")
+        prompt = build_repair_prompt(result.output, result.stage)
 
     log["succeeded"] = success
     log_path = config.OUTPUT_DIR / f"{name}-log.json"

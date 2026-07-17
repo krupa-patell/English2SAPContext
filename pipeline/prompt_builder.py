@@ -14,7 +14,8 @@ SYSTEM_HEADER = """\
 You are an expert in formal verification of security protocols using the
 Tamarin prover's SAPIC+ process calculus. Your task: translate an English
 description of a security protocol into a complete, syntactically valid
-SAPIC+ theory (.spthy file) that parses with `tamarin-prover --parse-only`.
+SAPIC+ theory (.spthy file) that compiles with tamarin-prover: it must
+parse and the full SAPIC+ translation must load successfully.
 
 Requirements for every theory you produce:
 - Start with `theory <name>` / `begin` and finish with `end`.
@@ -109,10 +110,20 @@ def build_user_prompt(description: str) -> str:
     )
 
 
-def build_repair_prompt(error_output: str) -> str:
+def build_repair_prompt(error_output: str, stage: str = "parse") -> str:
+    if stage == "compile":
+        intro = (
+            "The SAPIC+ theory you produced parses, but tamarin-prover failed "
+            "while compiling it (loading and translating the theory). "
+            "It reported:"
+        )
+    else:
+        intro = (
+            "The SAPIC+ theory you produced failed to parse. "
+            "`tamarin-prover --parse-only` reported:"
+        )
     return (
-        "The SAPIC+ theory you produced failed to parse. "
-        "`tamarin-prover --parse-only` reported:\n\n"
+        f"{intro}\n\n"
         f"```\n{error_output.strip()}\n```\n\n"
         "Fix the error and output the full corrected theory in a single "
         "```spthy fenced code block. Do not omit any part of the theory."
