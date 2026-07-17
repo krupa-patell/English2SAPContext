@@ -1,0 +1,11 @@
+/* Secrecy non-vacuity: an exists-trace lemma showing the Secret event
+   itself occurs in some honest trace. Pairs with the secrecy lemma to
+   ensure it is not vacuously true. */
+
+/* Requires events: Secret(x), Reveal(id). */
+
+lemma secrecy_nonvacuous:
+  exists-trace
+  "Ex x #i.
+     Secret(x) @ #i
+     & not (Ex X #r. Reveal(X) @ #r)"
