@@ -1,0 +1,142 @@
+theory DENNING_SACCO_SYMMETRIC_KEY
+begin
+
+builtins: symmetric-encryption
+
+// Roles
+
+// Initiator (A) with parameters: A (identity), Ksa (A-S long-term key), B (intended peer)
+let Initiator(A, Ksa, B) =
+  event StartA(A);
+  let m1 = <A, B> in
+  out(m1);
+  in(c2);
+  let m2 = sdec(c2, Ksa) in
+  let < =B, Kab, T, Ticket > = m2 in
+  event CommitA(A, B, Kab, T);
+  event Secret(A, B, Kab);
+  event RunningA(A, B, Kab, T);
+  out(Ticket)
+
+// Responder (B) with parameters: B (identity), Ksb (B-S long-term key)
+let Responder(B, Ksb) =
+  event StartB(B);
+  in(Ticket);
+  let pt = sdec(Ticket, Ksb) in
+  let < Kab, A_fromTicket, T > = pt in
+  event CommitB(A_fromTicket, B, Kab, T);
+  event Secret(A_fromTicket, B, Kab)
+
+// Server (trusted S) for a fixed pair (A,B) and their long-term keys
+let Server(A, B, Ksa, Ksb) =
+  event StartS(A, B);
+  in(req);
+  let < =A, =B > = req in
+  new Kab;
+  new T;
+  let Ticket = senc(<Kab, A, T>, Ksb) in
+  let c2 = senc(<B, Kab, T, Ticket>, Ksa) in
+  event RunningS(A, B, Kab, T);
+  out(c2)
+
+// Key-compromise helpers
+let RevealHelperA(A, Ksa) =
+  in(x);
+  event RevealA(A);
+  out(Ksa)
+
+let RevealHelperB(B, Ksb) =
+  in(x);
+  event RevealB(B);
+  out(Ksb)
+
+
+// Top-level system composition
+process:
+!(
+  new A; new Ksa; out(A); event HonestA(A);
+  (
+      !RevealHelperA(A, Ksa)
+    | !( in(Bsel); Initiator(A, Ksa, Bsel) )
+    | !(
+        new B; new Ksb; out(B); event HonestB(B);
+        (
+            !RevealHelperB(B, Ksb)
+          | !Responder(B, Ksb)
+          | !Server(A, B, Ksa, Ksb)
+        )
+      )
+  )
+)
+
+
+// Lemmas
+
+// 1) Secrecy of the session key
+lemma secrecy_of_Kab:
+  "not(
+     Ex A B Kab #i #j.
+       Secret(A, B, Kab) @ #i
+     & K(Kab) @ #j
+     & not(Ex #r. RevealA(A) @ #r & #r < #i)
+     & not(Ex #s. RevealB(B) @ #s & #s < #i)
+   )"
+
+// 2) Injective agreement — A authenticates S on (A, B, Kab, Ts)
+lemma inj_agree_A_S:
+  "(
+     All A B Kab Ts #i.
+       CommitA(A, B, Kab, Ts) @ #i
+     & not(Ex #r. RevealA(A) @ #r & #r < #i)
+     & not(Ex #s. RevealB(B) @ #s & #s < #i)
+     ==>
+       (Ex #j. RunningS(A, B, Kab, Ts) @ #j & #j < #i)
+   )
+   &
+   (
+     All A B Kab Ts #i #i2.
+       CommitA(A, B, Kab, Ts) @ #i
+     & CommitA(A, B, Kab, Ts) @ #i2
+     & not(Ex #r. RevealA(A) @ #r & #r < #i)
+     & not(Ex #s. RevealB(B) @ #s & #s < #i)
+     ==> #i = #i2
+   )"
+
+// 3) Non-injective agreement — A authenticates S on (A, B, Kab, Ts)
+lemma agree_A_S:
+  "All A B Kab Ts #i.
+     CommitA(A, B, Kab, Ts) @ #i
+   & not(Ex #r. RevealA(A) @ #r & #r < #i)
+   & not(Ex #s. RevealB(B) @ #s & #s < #i)
+   ==>
+     (Ex #j. RunningS(A, B, Kab, Ts) @ #j & #j < #i)"
+
+// 4) Non-injective agreement — B authenticates A (via S's ticket) on (A, B, Kab, Ts)
+lemma agree_B_A:
+  "All A B Kab Ts #i.
+     CommitB(A, B, Kab, Ts) @ #i
+   & not(Ex #r. RevealA(A) @ #r & #r < #i)
+   & not(Ex #s. RevealB(B) @ #s & #s < #i)
+   ==>
+     (Ex #j. RunningA(A, B, Kab, Ts) @ #j & #j < #i)"
+
+// 5) Sanity / executability
+lemma executability:
+  exists-trace
+  "Ex A B Kab Ts #j #i.
+       RunningS(A, B, Kab, Ts) @ #j
+     & CommitA(A, B, Kab, Ts) @ #i
+     & #j < #i
+     & not(Ex #r. RevealA(A) @ #r)
+     & not(Ex #s. RevealB(B) @ #s)"
+
+// 6) Session-key agreement between A and B (consistency on timestamp)
+lemma session_key_agreement:
+  "All A B Kab Ts Ts2 #i #k.
+       CommitA(A, B, Kab, Ts) @ #i
+     & CommitB(A, B, Kab, Ts2) @ #k
+     & not(Ex #r. RevealA(A) @ #r)
+     & not(Ex #s. RevealB(B) @ #s)
+     ==> Ts = Ts2"
+
+end

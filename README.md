@@ -10,6 +10,7 @@ the local knowledge base.
 PipelineV2/
 ├── NamingConventions.md variable naming rules embedded in every generation prompt
 ├── PromptFramework.md   framework the LLM instantiates into the generation prompt
+├── Builtin-Selection-Rules.md  builtins reference the generator consults
 ├── ProtocolBits/        SAPIC+ building blocks, grouped by protocol phase
 ├── Benchmark/           ground truth: <name>.txt (English) + <name>-P.spthy
 ├── Input/               drop user English descriptions here (.txt)
@@ -42,9 +43,10 @@ PipelineV2/
    roles, top-level process, lemmas). That completed text becomes the
    generation prompt; if the call fails, the raw description is used.
 3. **Build the system prompt** — the system message embeds the naming
-   conventions, the selected building blocks, and a few Benchmark
-   (description → code) pairs as worked examples (`prompt_builder.py`,
-   examples chosen in `config.FEW_SHOT_EXAMPLES`).
+   conventions, the built-in theory selection rules
+   (`Builtin-Selection-Rules.md`), the selected building blocks, and a few
+   Benchmark (description → code) pairs as worked examples
+   (`prompt_builder.py`, examples chosen in `config.FEW_SHOT_EXAMPLES`).
 4. **Generate** — the prompts go to OpenAI (`config.OPENAI_MODEL`, default
    `gpt-5`; override with the `OPENAI_MODEL` env var).
 5. **Extract & validate** — the ```spthy block is extracted and parsed with

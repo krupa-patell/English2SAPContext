@@ -18,8 +18,8 @@ SAPIC+ theory (.spthy file) that parses with `tamarin-prover --parse-only`.
 
 Requirements for every theory you produce:
 - Start with `theory <name>` / `begin` and finish with `end`.
-- Declare needed `builtins:` (e.g. symmetric-encryption, asymmetric-encryption,
-  signing, hashing, diffie-hellman) and any custom `functions:`.
+- Declare needed `builtins:` following the built-in theory selection rules
+  below, plus any custom `functions:`.
 - Model each role as a `let <Role>(...) = ...` process using new/in/out/let/event.
 - Compose roles under `process:` (e.g. `new k; (!A(k) | !B(k))`).
 - Emit `event` actions at protocol milestones so lemmas can reference them.
@@ -44,6 +44,20 @@ def _format_naming_conventions() -> str:
         encoding="utf-8", errors="replace"
     )
     return f"\n# Naming conventions\n\n{conventions.strip()}\n"
+
+
+def _format_builtin_rules() -> str:
+    if not config.BUILTIN_RULES_FILE.exists():
+        return ""
+    rules = config.BUILTIN_RULES_FILE.read_text(encoding="utf-8", errors="replace")
+    return (
+        "\n# Built-in theory selection rules\n\n"
+        "Use the following reference when deciding which `builtins:` your\n"
+        "theory declares. Where it describes a standalone task (listing,\n"
+        "mapping, justifying), apply its rules and mapping hints to the\n"
+        "theory you produce instead of replying with a builtins line alone.\n\n"
+        f"{rules.strip()}\n"
+    )
 
 
 def _format_bits(bits: list[ProtocolBit]) -> str:
@@ -79,6 +93,7 @@ def build_system_prompt(bits: list[ProtocolBit] | None = None) -> str:
     return (
         SYSTEM_HEADER
         + _format_naming_conventions()
+        + _format_builtin_rules()
         + _format_bits(bits)
         + _format_examples()
     )
