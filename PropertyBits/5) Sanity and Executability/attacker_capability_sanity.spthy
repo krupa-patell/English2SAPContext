@@ -1,0 +1,12 @@
+/* Attacker-capability sanity: an exists-trace lemma showing the attacker
+   can learn a value that is deliberately public (e.g. a published public
+   key), confirming the equational theory and channels are modelled as
+   intended. */
+
+/* Requires events: an event marking the public value at publication, e.g.
+   PublicValue(pk(ltk)) alongside out(pk(ltk)). */
+
+lemma attacker_sees_public_values:
+  exists-trace
+  "Ex v #i #j.
+     PublicValue(v) @ #i & K(v) @ #j"

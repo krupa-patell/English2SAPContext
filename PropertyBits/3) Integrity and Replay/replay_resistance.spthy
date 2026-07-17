@@ -1,0 +1,11 @@
+/* Replay resistance: no two distinct Accept (or Commit) events on the same
+   tuple. This is the injectivity condition of injective agreement isolated
+   as its own lemma; useful for protocols with one-way messages where full
+   agreement is not claimed. */
+
+/* Requires events: Accept(tuple) -- the tuple should contain the values
+   that make a run unique (nonce, timestamp, counter). */
+
+lemma replay_resistance:
+  "All t #i #j.
+     Accept(t) @ #i & Accept(t) @ #j ==> #i = #j"

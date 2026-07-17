@@ -1,0 +1,13 @@
+/* Fairness (exchange protocols): if one party obtains its item, then either
+   the peer obtains its item too, or a resolvable state exists (e.g. a
+   trusted third party can still resolve). Often needs a liveness-style
+   formulation or restrictions -- flag as harder for automated proof. */
+
+/* Requires events: GotItem(actor, item), TTPResolve(actor) reachable in the
+   resolve subprotocol. */
+
+lemma fairness_exchange:
+  "All A itemA #i.
+     GotItem(A, itemA) @ #i
+     ==> (Ex B itemB #j. GotItem(B, itemB) @ #j)
+       | (Ex B #k. TTPResolve(B) @ #k)"

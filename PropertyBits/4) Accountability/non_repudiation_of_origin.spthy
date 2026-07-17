@@ -1,0 +1,13 @@
+/* Non-repudiation of origin: if a verifier accepts evidence that A sent m,
+   then A really performed the send. NOTE: no compromise escape clause on A
+   if the property should bind even dishonest signers to their signatures.
+   Add a receipt variant (NonRepudiationOfReceipt) for fair-exchange
+   protocols. */
+
+/* Requires events: Sent(actor, m) at the signing step, Verified(verifier,
+   actor, m) after evidence verification. */
+
+lemma non_repudiation_of_origin:
+  "All V A m #i.
+     Verified(V, A, m) @ #i
+     ==> Ex #j. Sent(A, m) @ #j & #j < #i"

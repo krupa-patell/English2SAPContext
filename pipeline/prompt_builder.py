@@ -8,7 +8,12 @@ Builds three things:
 """
 
 from . import config
-from .knowledge import ProtocolBit, load_benchmark_examples, load_protocol_bits
+from .knowledge import (
+    ProtocolBit,
+    load_benchmark_examples,
+    load_property_bits,
+    load_protocol_bits,
+)
 
 SYSTEM_HEADER = """\
 You are an expert in formal verification of security protocols using the
@@ -24,8 +29,11 @@ Requirements for every theory you produce:
 - Model each role as a `let <Role>(...) = ...` process using new/in/out/let/event.
 - Compose roles under `process:` (e.g. `new k; (!A(k) | !B(k))`).
 - Emit `event` actions at protocol milestones so lemmas can reference them.
-- Include at least one `exists-trace` executability lemma, plus secrecy or
-  authentication lemmas appropriate to the description's security goals.
+- ALWAYS include an `exists-trace` executability lemma showing one complete
+  honest run; it is the only lemma mandatory for every protocol.
+- Add further security-property lemmas exactly as the prompt directs,
+  adapting the property lemma templates below to the protocol's events. Do
+  not add properties the protocol does not claim.
 - Name variables according to the naming conventions below whenever the
   protocol has a matching concept; only deviate for concepts the
   conventions do not cover (following their style, e.g. role suffixes).
@@ -72,6 +80,30 @@ def _format_bits(bits: list[ProtocolBit]) -> str:
     return "".join(parts)
 
 
+def _format_lemma_bits(bits: list[ProtocolBit]) -> str:
+    parts = [
+        "\n# Property lemma templates\n\n"
+        "The following lemma templates cover the security properties selected "
+        "for this protocol. When the prompt asks for one of these properties, "
+        "adapt its template: keep the logical shape, rename events and adjust "
+        "arities/argument order to the events your processes actually emit, "
+        "and make sure every referenced event is emitted at the semantically "
+        "correct point. If the prompt's compromise scenario models no key "
+        "compromise, drop the Reveal/Honest escape clauses from the adapted "
+        "lemmas (they must appear either consistently everywhere or not at "
+        "all).\n"
+    ]
+    current_phase = None
+    for bit in bits:
+        if bit.phase != current_phase:
+            parts.append(f"\n## Category: {bit.phase}\n")
+            current_phase = bit.phase
+        parts.append(
+            f"### Lemma template: {bit.name}\n```spthy\n{bit.code.strip()}\n```\n"
+        )
+    return "".join(parts)
+
+
 def _format_examples() -> str:
     parts = ["\nHere are complete worked examples of the translation task:\n"]
     for ex in load_benchmark_examples(config.FEW_SHOT_EXAMPLES):
@@ -83,19 +115,26 @@ def _format_examples() -> str:
     return "".join(parts)
 
 
-def build_system_prompt(bits: list[ProtocolBit] | None = None) -> str:
-    """Build the system prompt around the given building blocks.
+def build_system_prompt(
+    bits: list[ProtocolBit] | None = None,
+    lemma_bits: list[ProtocolBit] | None = None,
+) -> str:
+    """Build the system prompt around the given building blocks and lemmas.
 
-    `bits` is normally the selector's per-protocol pick; None embeds the
-    whole ProtocolBits library (e.g. for --dry-run, which makes no API calls).
+    `bits`/`lemma_bits` are normally the selector's per-protocol picks; None
+    embeds the whole ProtocolBits/PropertyBits library (e.g. for --dry-run,
+    which makes no API calls).
     """
     if bits is None:
         bits = load_protocol_bits()
+    if lemma_bits is None:
+        lemma_bits = load_property_bits()
     return (
         SYSTEM_HEADER
         + _format_naming_conventions()
         + _format_builtin_rules()
         + _format_bits(bits)
+        + _format_lemma_bits(lemma_bits)
         + _format_examples()
     )
 

@@ -1,10 +1,14 @@
-"""Loads the SAPIC+ knowledge base: ProtocolBits building blocks and
-Benchmark ground-truth (English description, SAPIC+ code) example pairs."""
+"""Loads the SAPIC+ knowledge base: ProtocolBits building blocks,
+PropertyBits lemma templates, and Benchmark ground-truth (English
+description, SAPIC+ code) example pairs."""
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import config
+
+_COMMENT_RE = re.compile(r"/\*(.*?)\*/", re.DOTALL)
 
 
 @dataclass
@@ -21,10 +25,10 @@ class BenchmarkExample:
     code: str
 
 
-def load_protocol_bits() -> list[ProtocolBit]:
-    """Load every building-block .spthy under ProtocolBits, grouped by phase folder."""
+def _load_bits(root: Path) -> list[ProtocolBit]:
+    """Load every .spthy under a bits library, grouped by subfolder."""
     bits = []
-    for phase_dir in sorted(config.PROTOCOL_BITS_DIR.iterdir()):
+    for phase_dir in sorted(root.iterdir()):
         if not phase_dir.is_dir():
             continue
         for spthy in sorted(phase_dir.glob("*.spthy")):
@@ -34,6 +38,36 @@ def load_protocol_bits() -> list[ProtocolBit]:
                 code=spthy.read_text(encoding="utf-8", errors="replace"),
             ))
     return bits
+
+
+def load_protocol_bits() -> list[ProtocolBit]:
+    """Load the ProtocolBits building-block library."""
+    return _load_bits(config.PROTOCOL_BITS_DIR)
+
+
+def load_property_bits() -> list[ProtocolBit]:
+    """Load the PropertyBits security-property lemma-template library."""
+    return _load_bits(config.PROPERTY_BITS_DIR)
+
+
+def summarize_bit(bit: ProtocolBit) -> str:
+    """One-line summary of a bit: its first /* ... */ comment, if any."""
+    match = _COMMENT_RE.search(bit.code)
+    if match:
+        return " ".join(match.group(1).split())
+    return "(no description)"
+
+
+def build_catalog(bits: list[ProtocolBit], label: str = "Phase") -> str:
+    """Render bits as a name+summary catalog, grouped by phase/category."""
+    lines = []
+    current_phase = None
+    for bit in bits:
+        if bit.phase != current_phase:
+            lines.append(f"\n{label} {bit.phase}:")
+            current_phase = bit.phase
+        lines.append(f'- "{bit.name}": {summarize_bit(bit)}')
+    return "\n".join(lines)
 
 
 def _find_spthy_for(txt_path: Path) -> Path | None:

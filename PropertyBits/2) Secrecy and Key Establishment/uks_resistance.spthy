@@ -1,0 +1,10 @@
+/* Unknown key-share (UKS) resistance: if A commits to key k believing the
+   peer is B, then no honest party C different from B commits to the same k
+   believing ITS peer is A. */
+
+/* Requires events: CommitKey(actor, peer, key), Reveal(id), Honest(id). */
+
+lemma uks_resistance:
+  "All A B C k #i #j.
+     CommitKey(A, B, k) @ #i & CommitKey(C, A, k) @ #j & not (C = B)
+     ==> Ex X #r. Reveal(X) @ #r & (Honest(X) @ #i | Honest(X) @ #j)"

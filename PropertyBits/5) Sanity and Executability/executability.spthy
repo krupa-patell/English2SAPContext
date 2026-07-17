@@ -1,0 +1,14 @@
+/* Sanity / executability (MANDATORY in every theory): an exists-trace lemma
+   showing one complete honest protocol run is possible -- a Running and a
+   matching Commit on the same tuple (or the protocol's completion events),
+   with no party compromised. Without it, every other lemma may hold
+   vacuously on an unrunnable model. */
+
+/* Requires events: the protocol's completion events (Running/Commit pair or
+   a dedicated Finish event), Reveal(id). */
+
+lemma executable:
+  exists-trace
+  "Ex A B t #i #j.
+     Running(A, B, t) @ #i & Commit(B, A, t) @ #j
+     & not (Ex X #r. Reveal(X) @ #r)"

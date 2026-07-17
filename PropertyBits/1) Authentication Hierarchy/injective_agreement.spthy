@@ -1,0 +1,14 @@
+/* Injective agreement (strongest of Lowe's hierarchy): as non-injective
+   agreement, plus each Commit corresponds to a UNIQUE Running -- excluding
+   replay of an old session. */
+
+/* Requires events: Commit(actor, peer, tuple), Running(actor, peer, tuple),
+   Reveal(id), Honest(id). The tuple should contain a fresh value (nonce or
+   session key) for injectivity to be provable. */
+
+lemma injective_agreement:
+  "All A B t #i.
+     Commit(A, B, t) @ #i
+     ==> (Ex #j. Running(B, A, t) @ #j & #j < #i
+            & not (Ex A2 B2 #i2. Commit(A2, B2, t) @ #i2 & not (#i2 = #i)))
+       | (Ex X #r. Reveal(X) @ #r & Honest(X) @ #i)"

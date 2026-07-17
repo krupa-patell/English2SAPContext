@@ -1,0 +1,13 @@
+/* Key confirmation: whenever a role confirms key k, the peer has previously
+   emitted an event proving it actually DERIVED (not merely could derive) k,
+   unless compromised. */
+
+/* Requires events: ComputeKey(actor, key) at the point the peer derives k,
+   Confirm(actor, peer, key) after the confirming message is checked,
+   Reveal(id), Honest(id). */
+
+lemma key_confirmation:
+  "All A B k #i.
+     Confirm(A, B, k) @ #i
+     ==> (Ex #j. ComputeKey(B, k) @ #j & #j < #i)
+       | (Ex X #r. Reveal(X) @ #r & Honest(X) @ #i)"

@@ -1,0 +1,14 @@
+/* Non-injective agreement on a data tuple: whenever the role commits on
+   tuple t with peer B, then B previously ran with the same tuple t --
+   without requiring the commit to be unique (replays not excluded). */
+
+/* Requires events: Commit(actor, peer, tuple) after all checks succeed,
+   Running(actor, peer, tuple) before the convincing message is sent,
+   Reveal(id), Honest(id). Tuples must bind role tags, identities and agreed
+   data in the same order on both sides. */
+
+lemma noninjective_agreement:
+  "All A B t #i.
+     Commit(A, B, t) @ #i
+     ==> (Ex #j. Running(B, A, t) @ #j)
+       | (Ex X #r. Reveal(X) @ #r & Honest(X) @ #i)"

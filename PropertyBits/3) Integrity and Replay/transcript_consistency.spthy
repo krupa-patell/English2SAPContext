@@ -1,0 +1,13 @@
+/* Transcript consistency / matching conversations: if both parties
+   complete, the transcripts recorded in their Finished events are equal,
+   unless compromised. Stronger than agreement on selected data; relevant
+   for TLS-like protocols. */
+
+/* Requires events: Finished(actor, peer, sessid, transcript) hashing or
+   tupling every message sent and received, Reveal(id), Honest(id). */
+
+lemma transcript_consistency:
+  "All A B tA tB sid #i #j.
+     Finished(A, B, sid, tA) @ #i & Finished(B, A, sid, tB) @ #j
+     ==> (tA = tB)
+       | (Ex X #r. Reveal(X) @ #r & (Honest(X) @ #i | Honest(X) @ #j))"

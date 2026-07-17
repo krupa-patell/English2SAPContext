@@ -1,0 +1,73 @@
+theory SignedEncryptedToken_Section7_5
+begin
+
+builtins: asymmetric-encryption, signing, hashing
+
+/* Sender A: signs hash of token and encrypts confidential part to B */
+let SenderA(skA, pkB, idB) =
+  new tA;
+  new rA;
+  new sgnData;
+  new encData;
+  let ciph = aenc(encData, pkB) in
+  let y = <tA, rA, idB, sgnData, ciph> in
+  let digest = h(y) in
+  let sig = sign(digest, skA) in
+  event Secret(encData, pk(skA), pkB);
+  event SendToken(pk(skA), idB, pkB, tA, rA, sgnData, ciph, sig);
+  out(<y, sig>)
+
+/* Receiver B: checks recipient, verifies signature, and decrypts */
+let ReceiverB(skB, pkA, idB) =
+  in(msg);
+  let <y, sig> = msg in
+  let <t, r, =idB, sgnDataR, ciphR> = y in
+  let digest = h(y) in
+  if verify(sig, digest, pkA) = true then
+    let encDataR = adec(ciphR, skB) in
+    event AcceptToken(pkA, idB, pk(skB), t, r, sgnDataR, ciphR, sig)
+  else
+    0
+
+/* System composition: unbounded many Bs; for each, unbounded many As; for each A–B pair, unbounded sessions */
+process:
+!(
+  new skB;
+  let pkB = pk(skB) in
+  out(pkB);
+  new idB;
+  !(
+    new skA;
+    let pkA = pk(skA) in
+    out(pkA);
+    ! ( SenderA(skA, pkB, idB) | ReceiverB(skB, pkA, idB) )
+  )
+)
+
+/* Lemmas */
+
+/* 1) Executability: one complete honest run exists */
+lemma executability:
+  exists-trace
+  "Ex pkA idB pkB t r sgn ciph sig #i #j.
+     SendToken(pkA, idB, pkB, t, r, sgn, ciph, sig) @ #i
+     & AcceptToken(pkA, idB, pkB, t, r, sgn, ciph, sig) @ #j"
+
+/* 2) Message origin authenticity: any accepted token was previously sent on the same tuple */
+lemma message_origin_authenticity:
+  "All pkA idB pkB t r sgn ciph sig #i.
+     AcceptToken(pkA, idB, pkB, t, r, sgn, ciph, sig) @ #i
+     ==> Ex #j. SendToken(pkA, idB, pkB, t, r, sgn, ciph, sig) @ #j & #j < #i"
+
+/* 3) Secrecy of the confidential payload encData */
+lemma secrecy:
+  "All x pkA pkB #i.
+     Secret(x, pkA, pkB) @ #i
+     ==> not (Ex #j. K(x) @ #j)"
+
+/* 4) Secrecy non-vacuity */
+lemma secrecy_non_vacuity:
+  exists-trace
+  "Ex x pkA pkB #i. Secret(x, pkA, pkB) @ #i"
+
+end

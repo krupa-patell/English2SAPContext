@@ -1,0 +1,12 @@
+/* Unlinkability / anonymity (equivalence-based, NOT a trace lemma): two
+   sessions by the same agent are indistinguishable from sessions by
+   different agents. Typical for RFID, e-passport, and mobile-network
+   protocols. */
+
+/* Template (bi-process): compare a system where the same identity runs
+   twice against one where two identities run once each.
+
+   new id1; new id2;
+   ( Session(id1) | Session(diff(id1, id2)) )
+
+   Verify with: tamarin-prover --diff <theory.spthy>, ProVerif, or DeepSec. */

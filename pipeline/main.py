@@ -22,7 +22,7 @@ from .extractor import extract_spthy
 from .llm_client import LLMSession
 from .prompt_builder import build_repair_prompt, build_system_prompt, build_user_prompt
 from .prompt_generator import generate_prompt
-from .selector import select_bits
+from .selector import select_bits, select_lemmas
 from .validator import validate_spthy
 
 
@@ -52,7 +52,13 @@ def run_pipeline(name: str, description: str) -> bool:
     else:
         prompt = build_user_prompt(description)
 
-    session = LLMSession(build_system_prompt(bits))
+    print(f"[{name}] selecting property lemma templates with {config.SELECTOR_MODEL}...")
+    lemma_bits = select_lemmas(generated if generated is not None else description)
+    log["selected_lemmas"] = [f"{bit.phase}/{bit.name}" for bit in lemma_bits]
+    print(f"[{name}] selected {len(lemma_bits)} lemma templates: "
+          f"{', '.join(bit.name for bit in lemma_bits)}")
+
+    session = LLMSession(build_system_prompt(bits, lemma_bits))
     code = None
     success = False
 
@@ -137,10 +143,11 @@ def main() -> int:
         return 1
 
     if args.dry_run:
-        # Dry-run makes no API calls, so block selection and framework prompt
-        # generation are skipped: the system prompt shown embeds the full
-        # ProtocolBits library, and the user prompt is the raw description.
-        print("=== SYSTEM PROMPT (full library; real runs select blocks) ===\n")
+        # Dry-run makes no API calls, so block/lemma selection and framework
+        # prompt generation are skipped: the system prompt shown embeds the
+        # full ProtocolBits and PropertyBits libraries, and the user prompt
+        # is the raw description.
+        print("=== SYSTEM PROMPT (full libraries; real runs select blocks/lemmas) ===\n")
         print(build_system_prompt())
         for name, description in jobs:
             print(f"\n=== USER PROMPT ({name}; real runs instantiate "

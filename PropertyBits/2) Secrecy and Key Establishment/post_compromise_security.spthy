@@ -1,0 +1,13 @@
+/* Post-compromise security / healing: after a compromise followed by an
+   uncompromised update/ratchet epoch, subsequently established secrets are
+   again unknown to the attacker. For ratcheting or messaging protocols;
+   state relative to epoch events. */
+
+/* Requires events: Epoch(actor, peer) at each update/ratchet step,
+   Secret(actor, peer, x) for secrets established after the epoch,
+   Reveal(id). */
+
+lemma post_compromise_security:
+  "All A B x #u #i #j.
+     Epoch(A, B) @ #u & Secret(A, B, x) @ #i & #u < #i & K(x) @ #j
+     ==> Ex X #r. Reveal(X) @ #r & #u < #r & (X = A | X = B)"

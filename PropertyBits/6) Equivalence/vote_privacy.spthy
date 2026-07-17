@@ -1,0 +1,10 @@
+/* Vote privacy / receipt-freeness (equivalence-based, NOT a trace lemma):
+   swapping two voters' votes yields observationally equivalent processes.
+   E-voting only; receipt-freeness and coercion-resistance are strictly
+   stronger and often out of automated reach. */
+
+/* Template (bi-process): swap the votes of two honest voters.
+
+   ( Voter(idA, diff(voteA, voteB)) | Voter(idB, diff(voteB, voteA)) )
+
+   Verify with: tamarin-prover --diff <theory.spthy>, ProVerif, or DeepSec. */

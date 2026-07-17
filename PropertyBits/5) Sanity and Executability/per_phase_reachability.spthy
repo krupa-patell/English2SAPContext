@@ -1,0 +1,14 @@
+/* Per-phase reachability: one exists-trace lemma per protocol phase or
+   branch (resumption path, error path, TTP subprotocol), showing each
+   phase-completion event is reachable without any compromise. Catches
+   models where a later phase is vacuously secure because it is unreachable
+   -- the most common cause of spurious proofs in generated models. */
+
+/* Requires events: a PhaseComplete-style event per phase/branch
+   (instantiate one copy of this lemma per phase). */
+
+lemma phase_reachable:
+  exists-trace
+  "Ex #i.
+     PhaseComplete() @ #i
+     & not (Ex X #r. Reveal(X) @ #r)"

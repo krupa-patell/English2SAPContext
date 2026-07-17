@@ -1,0 +1,15 @@
+/* Recent aliveness / freshness of authentication: as aliveness, but the
+   peer's run happens AFTER a fresh challenge by the authenticating role,
+   ruling out replay of stale sessions. State via the challenge nonce
+   carried in the Running/Commit tuple. */
+
+/* Requires events: Challenge(actor, nonce) at nonce creation,
+   Running(actor, peer, <nonce, ...>), Commit(actor, peer, <nonce, ...>),
+   Reveal(id), Honest(id). */
+
+lemma recent_aliveness:
+  "All A B n t #i.
+     Commit(A, B, <n, t>) @ #i
+     ==> (Ex #k #j. Challenge(A, n) @ #k & Running(B, A, <n, t>) @ #j
+            & #k < #j & #j < #i)
+       | (Ex X #r. Reveal(X) @ #r & Honest(X) @ #i)"

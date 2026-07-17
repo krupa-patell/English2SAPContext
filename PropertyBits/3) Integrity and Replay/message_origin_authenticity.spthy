@@ -1,0 +1,12 @@
+/* Message / data-origin authenticity: whenever a receiver accepts message
+   m, an honest sender previously sent exactly m (data integrity: the
+   accepted value equals the sent value), unless compromised. */
+
+/* Requires events: Send(actor, m) at transmission, Accept(actor, m) after
+   all checks succeed, Reveal(id), Honest(id). */
+
+lemma message_origin_authenticity:
+  "All B m #i.
+     Accept(B, m) @ #i
+     ==> (Ex A #j. Send(A, m) @ #j & #j < #i)
+       | (Ex X #r. Reveal(X) @ #r & Honest(X) @ #i)"

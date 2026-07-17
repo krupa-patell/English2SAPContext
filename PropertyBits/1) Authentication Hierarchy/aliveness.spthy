@@ -1,0 +1,14 @@
+/* Aliveness (weakest of Lowe's authentication hierarchy): whenever the
+   authenticating role commits with intended peer B, then B has previously
+   executed SOME protocol event (any participation), unless a party was
+   compromised. Useful as a diagnostic when stronger agreement fails. */
+
+/* Requires events: Commit(actor, peer, tuple), a participation event of the
+   peer (any Running(...) or a dedicated Create/Init event), Reveal(id),
+   Honest(id) at key creation. */
+
+lemma aliveness:
+  "All A B t #i.
+     Commit(A, B, t) @ #i
+     ==> (Ex id t2 #j. Running(B, id, t2) @ #j)
+       | (Ex X #r. Reveal(X) @ #r & Honest(X) @ #i)"

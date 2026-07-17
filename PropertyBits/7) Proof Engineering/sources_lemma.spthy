@@ -1,0 +1,14 @@
+/* Sources / typing lemma (proof engineering, not a security property):
+   resolves partial deconstructions by asserting where a message component
+   can originate -- from a specific protocol step or from the attacker. Emit
+   when Tamarin reports open chains / partial deconstructions. Annotated
+   [sources] so Tamarin uses it during precomputation. */
+
+/* Requires events: an In-style event where the ambiguous component is
+   received and an Out-style event where it is produced. */
+
+lemma typing [sources]:
+  "All m #i.
+     InReceiver(m) @ #i
+     ==> (Ex #j. OutSender(m) @ #j)
+       | (Ex #j. KU(m) @ #j & #j < #i)"

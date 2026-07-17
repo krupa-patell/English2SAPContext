@@ -1,0 +1,9 @@
+/* Session-key uniqueness: no two distinct sessions establish the same key,
+   except the two matching partners of one session. */
+
+/* Requires events: CommitKey(actor, peer, key) at session completion. */
+
+lemma session_key_uniqueness:
+  "All A B A2 B2 k #i #j.
+     CommitKey(A, B, k) @ #i & CommitKey(A2, B2, k) @ #j & not (#i = #j)
+     ==> (A = B2 & B = A2)"

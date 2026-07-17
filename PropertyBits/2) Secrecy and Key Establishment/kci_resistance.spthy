@@ -1,0 +1,13 @@
+/* Key-compromise impersonation (KCI) resistance: even if A's OWN long-term
+   key is revealed, the attacker cannot make A accept a session apparently
+   with B unless B genuinely ran the matching session or B itself was also
+   revealed. Requires distinguishing whose key was revealed. */
+
+/* Requires events: Commit(actor, peer, tuple), Running(actor, peer, tuple),
+   Reveal(id) naming the compromised party. */
+
+lemma kci_resistance:
+  "All A B t #i.
+     Commit(A, B, t) @ #i
+     ==> (Ex #j. Running(B, A, t) @ #j)
+       | (Ex #r. Reveal(B) @ #r)"

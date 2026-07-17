@@ -1,0 +1,11 @@
+/* Strong secrecy (equivalence-based, NOT a trace lemma): the process using
+   the real secret is observationally equivalent to one using a fresh value
+   in its place. In SAPIC+, state with diff-terms and export to Tamarin's
+   observational-equivalence mode (--diff), ProVerif, or DeepSec. */
+
+/* Template (bi-process): replace the sensitive output with a diff-term.
+
+   new s; new s2;
+   out(c, diff(s, s2))       // real secret vs. fresh decoy
+
+   Verify with: tamarin-prover --diff <theory.spthy> */

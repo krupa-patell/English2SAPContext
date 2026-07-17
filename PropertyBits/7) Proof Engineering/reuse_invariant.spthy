@@ -1,0 +1,14 @@
+/* Reuse / invariant helper lemma (proof engineering, not a security
+   property): proved once and assumed while proving the main lemmas.
+   Typical instances: a long-term key appears on the network only after its
+   Reveal; state invariants for stateful protocols (counters monotonically
+   increase, at most one session per key). Annotate [reuse], and
+   [use_induction] when the proof needs induction over the trace. */
+
+/* Requires events: adapted to the invariant, e.g. LtkCreated(actor, key)
+   and Reveal(actor). */
+
+lemma ltk_stays_secret_until_reveal [reuse, use_induction]:
+  "All A k #i #j.
+     LtkCreated(A, k) @ #i & K(k) @ #j
+     ==> Ex #r. Reveal(A) @ #r & #r < #j"

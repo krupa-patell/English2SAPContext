@@ -1,0 +1,14 @@
+/* Perfect forward secrecy (PFS): a session key flagged Secret before any
+   compromise stays unknown to the attacker even if the parties' long-term
+   keys are revealed AFTER the session completes: any attacker knowledge of
+   the key implies a reveal that happened before the session. Distinguish
+   from weak forward secrecy, which additionally requires the attacker to be
+   passive during the session. */
+
+/* Requires events: Secret(x), Reveal(id), Honest(id). Long-term keys only
+   in Reveal; the session key must be derived from ephemeral values. */
+
+lemma perfect_forward_secrecy:
+  "All x #i #j.
+     Secret(x) @ #i & K(x) @ #j
+     ==> Ex X #r. Reveal(X) @ #r & Honest(X) @ #i & #r < #i"

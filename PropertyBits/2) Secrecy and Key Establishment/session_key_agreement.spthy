@@ -1,0 +1,13 @@
+/* Session-key agreement (consistency): if A commits to key k for a session
+   with B, and B commits to key k2 for the matching session with A, the two
+   keys are equal -- unless a party was compromised. For AKE protocols; pair
+   with key secrecy. */
+
+/* Requires events: CommitKey(actor, peer, key, sessid) with a shared
+   session identifier (e.g. the exchanged nonces), Reveal(id), Honest(id). */
+
+lemma session_key_agreement:
+  "All A B kA kB sid #i #j.
+     CommitKey(A, B, kA, sid) @ #i & CommitKey(B, A, kB, sid) @ #j
+     ==> (kA = kB)
+       | (Ex X #r. Reveal(X) @ #r & (Honest(X) @ #i | Honest(X) @ #j))"

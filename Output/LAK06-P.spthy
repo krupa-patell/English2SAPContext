@@ -1,0 +1,127 @@
+theory RFID_Auth_Update
+begin
+
+/* RFID Authentication with Hash-and-XOR Key Update (single-session variant)
+   Roles: Tag (T), Reader (R), Backend (B)
+   - Public network: in(...), out(...)
+   - Private Reader-Backend channel: modeled by scoping a fresh name cRB and
+     tagging messages with cRB; only parties knowing cRB accept such messages.
+   - Cryptography: XOR (built-in), and a free unary hash function h/1 (no equations).
+   - No key-compromise modeled.
+*/
+
+builtins: xor
+
+functions: h/1
+
+let Tag(tid, k) =
+  /* Secrecy claim for the_nonvacuous:
+  exists-trace
+  "Ex tid k  tag's current long-term key */
+  event Secret(tid, k);
+  /* 1. Fresh r1 */
+  new r1;
+  /* 2. Receive challenge s from Reader */
+  in(s);
+  /* 3. Compute r2 and send (r1, r2) */
+  let r2 = h(r1 XOR (k XOR s)) in
+  event Running('T', tid, s, r1, r2);
+  out(<r1, r2>);
+  /* 5. Receive r3, verify, and update on success */
+  in(r3);
+  let r3chk = h(r2 XOR (k XOR s)) in
+  if r3 = r3chk then
+    (
+      event Commit('T', tid, s, r1, r2);
+      let k1 = h(k) in 0
+    )
+  else 0
+
+
+let Reader(cRB) =
+  /* 1. Fresh challenge s */
+  new s;
+  /* 2. Send s to Tag */
+  out(s);
+  /* 3. Receive (r1, r2) from Tag */
+  in(p);
+  let <r1, r2> = p in
+  /* 4. Send (s, r1, r2) to Backend over private channel cRB */
+  out(<cRB, <s, r1, r2>>);
+  /*    Receive (claimedTid, matchedK) from Backend over cRB */
+  in(resp);
+  let <=cRB, <claimedTid, matchedK>> = resp in
+  /* 5. Compute r3' */
+  let r3p = h(r2 XOR (matchedK XOR s)) in
+  /* 6. Authentication events around sending r3' */
+  event Running('R', claimedTid, s, r1, r2);
+  out(r3p);
+  event Commit('R', claimedTid, s, r1, r2)
+
+
+let Backend(tid, K, Klast, cRB) =
+  /* 1. Initialization and secrecy claim for current key */
+  event Secret(tid, K);
+  /* 2. Receive (s, r1, r2) from Reader over cRB */
+  in(m);
+  let <=cRB, <s, r1, r2>> = m in
+  /* 3. Check against K and Klast, respond and update per spec */
+  let r2_K     = h(r1 XOR (K XOR s)) in
+  let r2_Klast = h(r1 XOR (Klast XOR s)) in
+  if r2 = r2_K then
+    (
+      out(<cRB, <tid, K>>);
+      let Klast1 = K in
+      let K1 = h(K) in
+      0
+    )
+  else
+    if r2 = r2_Klast then
+      out(<cRB, <tid, Klast>>)
+    else 0
+
+
+process:
+!(
+  new tid; new K; new Klast0; new cRB;
+  ( Tag(tid, K) | Reader(cRB) | Backend(tid, K, Klast0, cRB) )
+)
+
+
+/************ Lemmas ************/
+
+/* 1) Executability: one complete honest run with matching tuples */
+lemma executable:
+  exists-trace
+  "Ex tid s r1 r2 #iT #cT #iR #cR.
+     Running('T', tid, s, r1, r2) @ #iT
+   & Commit('T',  tid, s, r1, r2) @ #cT & #iT < #cT
+   & Running('R', tid, s, r1, r2) @ #iR
+   & Commit('R',  tid, s, r1, r2) @ #cR & #iR < #cR"
+
+/* 2) Injective agreement: Reader authenticates Tag */
+lemma injective_agreement_R:
+  "All tid s r1 r2 #i.
+     Commit('R', tid, s, r1, r2) @ #i
+     ==>
+     (Ex #j. Running('T', tid, s, r1, r2) @ #j & #j < #i
+        & not (Ex #i2. Commit('R', tid, s, r1, r2) @ #i2 & not (#i2 = #i)))"
+
+/* 3) Injective agreement: Tag authenticates Reader */
+lemma injective_agreement_T:
+  "All tid s r1 r2 #i.
+     Commit('T', tid, s, r1, r2) @ #i
+     ==>
+     (Ex #j. Running('R', tid, s, r1, r2) @ #j & #j < #i
+        & not (Ex #i2. Commit('T', tid, s, r1, r2) @ #i2 & not (#i2 = #i)))"
+
+/* 4) Secrecy of the Tag's/Backend's stored key */
+lemma secrecy:
+  "All tid k #i.
+     Secret(tid, k) @ #i
+     ==> not (Ex #j. K(k) @ #j)"
+
+/* 5) Secrecy non-vacuity */
+lemma secrecy#i. Secret(tid, k) @ #i"
+
+end

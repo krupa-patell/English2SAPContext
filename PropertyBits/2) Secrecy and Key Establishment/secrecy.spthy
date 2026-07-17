@@ -1,0 +1,13 @@
+/* Secrecy: a value flagged Secret by an honest party is never learned by
+   the attacker, unless one of the involved parties was compromised. Adapt
+   to the protocol's secrets: payloads, session keys, etc. */
+
+/* Requires events: Secret(x) at the point each honest party considers x
+   secret, Reveal(id) in the key-compromise helper, Honest(id) at key
+   creation. */
+
+lemma secrecy:
+  "All x #i.
+     Secret(x) @ #i
+     ==> not (Ex #j. K(x) @ #j)
+       | (Ex X #r. Reveal(X) @ #r & Honest(X) @ #i)"
