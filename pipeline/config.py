@@ -25,10 +25,13 @@ PROMPT_GEN_MODEL = os.environ.get("OPENAI_PROMPT_GEN_MODEL", OPENAI_MODEL)
 
 # Benchmark protocols used as few-shot (description -> SAPIC+) examples in the
 # prompt, ordered simplest first. Names refer to the .txt file stem.
-FEW_SHOT_EXAMPLES = ["Denning-Sacco", "EDHOC", "Otway-Rees"]
+FEW_SHOT_EXAMPLES = []
 
 # --- Validation / repair loop -----------------------------------------------
 TAMARIN_BINARY = os.environ.get("TAMARIN_BINARY", "tamarin-prover")
+# Parse stage (--parse-only) is quick; the full compile stage also runs the
+# SAPIC+ translation and maude-backed derivation checks, so it gets longer.
 TAMARIN_TIMEOUT_SECONDS = 120
+TAMARIN_COMPILE_TIMEOUT_SECONDS = 300
 # Total generation attempts = 1 initial + (MAX_REPAIR_ATTEMPTS) fix rounds.
 MAX_REPAIR_ATTEMPTS = 3

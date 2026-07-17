@@ -1,0 +1,130 @@
+theory CP_Signed_Token_Sec75
+begin
+
+builtins: asymmetric-encryption, signing, hashing
+
+functions:
+  path/2
+
+/* 
+  Certification-Path Signed Token Protocol (Section 7.5)
+  One-pass token: A -> B. Origin authentication (B authenticates A) and confidentiality of encData.
+*/
+
+let Initiator_A(skA) =
+  let pkA = pk(skA) in
+  event A_Start(pkA);
+  in(pkB);                                 // obtain intended recipient's public key
+  new tA;
+  new rA;
+  new sgnData;
+  new encData;
+  let ciph  = aenc(encData, pkB) in
+  let y     = <tA, rA, pkB, sgnData, ciph> in
+  let sigA  = sign(h(y), skA) in
+  let token = <y, sigA> in
+  let cp    = <path(pkB, pkA), pkA> in     // models "B → A" certification path carrying A's pk
+  event Running('A', pkA, 'B', pkB, tA, rA, sgnData, encData);
+  event Secret(encData, pkA, pkB);
+  out(<cp, token>)
+
+let Responder_B(skB) =
+  let pkB = pk(skB) in
+  event B_Start(pkB);
+  in(M1);
+  let <cp, token> = M1 in
+  let <cpval, ap> = cp in                   // extract candidate pkA (ap) from certification path pair
+  let <y, sigA> = token in
+  let <tA, rA, bname, sgnData, ciph> = y in
+  let digest = h(y) in
+  if verify(sigA, digest, ap) = true then    // hash-then-sign verification
+    if bname = pkB then                      // recipient check: intended for this B
+      let encData = adec(ciph, skB) in       // decrypt confidential parameters
+      event Commit('A', ap, 'B', pkB, tA, rA, sgnData, encData);
+      event Secret(encData, ap, pkB)
+
+let KeyReveal(sk) =
+  in(x);
+  if x = pk(sk) then
+    event Reveal(pk(sk));
+    out(sk)
+
+process:
+  (
+    !(
+      new skA;
+      let pkA = pk(skA) in
+      out(pkA);                      // publish A's public key
+      event HonestA(pkA);
+      ( !Initiator_A(skA) | !KeyReveal(skA) )
+    )
+  |
+    !(
+      new skB;
+      let pkB = pk(skB) in
+      out(pkB);                      // publish B's public key
+      event HonestB(pkB);
+      ( !Responder_B(skB) | !KeyReveal(skB) )
+    )
+  )
+
+/*********************
+ * Security Lemmas   *
+ *********************/
+
+/* 1) Secrecy of encData, unless a party is compromised */
+lemma secrecy_encData:
+  "All v a b i.
+     Secret(v, a, b) @ i
+     ==>
+       (not (Ex j. K(v) @ j))
+       | (Ex j1. Reveal(a) @ j1)
+       | (Ex j2. Reveal(b) @ j2)
+  "
+
+/* 2) Injective agreement: B authenticates A on the full tuple, unless compromise */
+lemma injective_agreement_B_authenticates_A:
+  "All a b t r s p i.
+     Commit('A', a, 'B', b, t, r, s, p) @ i
+     ==>
+       ( Ex j.
+           Running('A', a, 'B', b, t, r, s, p) @ j
+           & (All i2. Commit('A', a, 'B', b, t, r, s, p) @ i2 ==> i2 = i)
+       )
+       | (Ex k. Reveal(a) @ k)
+       | (Ex k2. Reveal(b) @ k2)
+  "
+
+/* 3) Non-injective agreement: B authenticates A on the full tuple, unless compromise */
+lemma noninj_agreement_B_authenticates_A:
+  "All a b t r s p i.
+     Commit('A', a, 'B', b, t, r, s, p) @ i
+     ==>
+       (Ex j. Running('A', a, 'B', b, t, r, s, p) @ j)
+       | (Ex k. Reveal(a) @ k)
+       | (Ex k2. Reveal(b) @ k2)
+  "
+
+/* 4) Sanity / executability: a complete uncompromised run exists */
+lemma executable_complete_run:
+  exists-trace
+    "Ex a b t r s p iHA iHB iR iC.
+       HonestA(a) @ iHA
+       & HonestB(b) @ iHB
+       & Running('A', a, 'B', b, t, r, s, p) @ iR
+       & Commit('A', a, 'B', b, t, r, s, p) @ iC
+       & not (Ex k. Reveal(a) @ k)
+       & not (Ex k2. Reveal(b) @ k2)
+    "
+
+/* 5) Replay-resistance sanity (nonce carried and checked under signature) */
+lemma replay_nonce_bound_to_run:
+  "All a b t r s p i.
+     Commit('A', a, 'B', b, t, r, s, p) @ i
+     ==>
+       (Ex j. Running('A', a, 'B', b, t, r, s, p) @ j)
+       | (Ex k. Reveal(a) @ k)
+       | (Ex k2. Reveal(b) @ k2)
+  "
+
+end

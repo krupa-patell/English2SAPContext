@@ -1,0 +1,115 @@
+theory SSH_DH_SERVER_AUTH
+begin
+
+builtins: diffie-hellman, signing, hashing
+
+functions:
+  kdf/4,
+  A/0, B/0, C/0, D/0, E/0, F/0
+
+/* Roles */
+
+let Client(pkS_expected, V_C, V_S, I_C, I_S) =
+  new cId;
+  event HonestC(cId);
+  new x;
+  let e = 'g'^x in
+  out(e);
+  in(resp);
+  let <K_S_recv, f, s> = resp in
+  if K_S_recv = pkS_expected then
+    let K = f^x in
+    let H = h(<V_C, V_S, I_C, I_S, K_S_recv, e, f, K>) in
+    if verify(s, H, K_S_recv) = true then
+      event Secret('C','S', pkS_expected, K);
+      event Commit('C','S', pkS_expected, e, f, H);
+      let sid = H in
+      let iv_c2s = kdf(A, K, H, sid) in
+      let iv_s2c = kdf(B, K, H, sid) in
+      let enc_c2s = kdf(C, K, H, sid) in
+      let enc_s2c = kdf(D, K, H, sid) in
+      let mac_c2s = kdf(E, K, H, sid) in
+      let mac_s2c = kdf(F, K, H, sid) in
+      0
+
+let Server(skS, pkS, V_C, V_S, I_C, I_S) =
+  in(e);
+  new y;
+  let f = 'g'^y in
+  let K = e^y in
+  let H = h(<V_C, V_S, I_C, I_S, pkS, e, f, K>) in
+  let s = sign(H, skS) in
+  event Running('C','S', pkS, e, f, H);
+  event Secret('C','S', pkS, K);
+  out(<pkS, f, s>)
+
+let Compromise(skS, pkS) =
+  in('reveal');
+  event Reveal(pkS);
+  out(skS)
+
+
+/* System composition */
+
+process:
+  new V_C; new V_S; new I_C; new I_S;
+  out('g'); out(V_C); out(V_S); out(I_C); out(I_S);
+  !(
+    new skS;
+    let pkS = pk(skS) in
+    out(pkS);
+    event HonestS(pkS);
+    (
+      Compromise(skS, pkS)
+      |
+      !Server(skS, pkS, V_C, V_S, I_C, I_S)
+      |
+      !Client(pkS, V_C, V_S, I_C, I_S)
+    )
+  )
+
+
+/* Lemmas */
+
+// Secrecy of the Diffie–Hellman shared secret K unless the server host key was revealed no later than the session
+lemma secrecy_K_unless_reveal_earlier_or_equal:
+  "All pkS K #i.
+     Secret('C','S', pkS, K) @ #i
+     ==> not(Ex #j. K(K) @ #j)
+         | (Ex #r. Reveal(pkS) @ #r & (#r < #i | #r = #i))"
+
+// Forward secrecy w.r.t. server key compromise (no reveal up to time i)
+lemma forward_secrecy_wrt_server_key:
+  "All pkS K #i.
+     Secret('C','S', pkS, K) @ #i
+     & (All #r. Reveal(pkS) @ #r ==> #i < #r)
+     ==> not(Ex #j. K(K) @ #j)"
+
+// Injective agreement (client authenticates server), unless the server key was revealed
+lemma injective_agreement_client_auth:
+  "All pkS e f H #i.
+     Commit('C','S', pkS, e, f, H) @ #i
+     ==> (Ex #j.
+            Running('C','S', pkS, e, f, H) @ #j
+            & #j < #i
+            & not(Ex #i2. Commit('C','S', pkS, e, f, H) @ #i2 & not(#i2 = #i))
+          )
+         | (Ex #r. Reveal(pkS) @ #r)"
+
+// Non-injective agreement (client authenticates server), unless the server key was revealed
+lemma noninjective_agreement_client_auth:
+  "All pkS e f H #i.
+     Commit('C','S', pkS, e, f, H) @ #i
+     ==> (Ex #j. Running('C','S', pkS, e, f, H) @ #j & #j < #i)
+         | (Ex #r. Reveal(pkS) @ #r)"
+
+// Executability: an honest run completes without any key reveal
+lemma executability:
+  exists-trace
+  "Ex pkS e f H #i #j.
+      Running('C','S', pkS, e, f, H) @ #i
+    & Commit('C','S', pkS, e, f, H) @ #j
+    & #i < #j
+    & not(Ex #r. Reveal(pkS) @ #r)"
+
+end

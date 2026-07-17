@@ -1,0 +1,132 @@
+theory SSH_DH_KEX
+begin
+
+builtins: diffie-hellman, signing, hashing
+functions: kdf/4
+
+/* SSH Diffie–Hellman key exchange with explicit server authentication (RFC 4253-like) */
+
+/* Role: Client
+   Parameters provided per session by environment via initial input:
+     - vc: client identification string V_C
+     - vs: server identification string V_S
+     - ic: client kexinit I_C
+     - is: server kexinit I_S
+     - pkS: intended server host public key
+*/
+let Client(pkS) =
+  in(<vc, vs, ic, is>);
+  event HonestClient(vc);
+  new eKc;
+  let ePKc = 'g'^eKc in
+  out(ePKc);
+  in(<pkS_rx, f, s>);
+  if pkS_rx = pkS then
+    let K = f^eKc in
+    let H = h(<vc, vs, ic, is, pkS, ePKc, f, K>) in
+    if verify(s, H, pkS_rx) = true then
+      event Secret(K, vc, pkS);
+      event Commit('C','S', vc, vs, ic, is, pkS, ePKc, f, K);
+      let sid = H in
+      event SessionId(sid, vc, pkS);
+      /* Optional traffic key derivations (uninterpreted) */
+      let kA = kdf(K, H, 'A', sid) in
+      let kB = kdf(K, H, 'B', sid) in
+      let kC = kdf(K, H, 'C', sid) in
+      let kD = kdf(K, H, 'D', sid) in
+      let kE = kdf(K, H, 'E', sid) in
+      let kF = kdf(K, H, 'F', sid) in
+      0
+  else 0
+
+/* Role: Server
+   Parameters:
+     - skS: server host private signing key
+     - pkS: pk(skS)
+   Per-session public parameters are provided by environment via initial input.
+*/
+let Server(skS, pkS) =
+  in(<vc, vs, ic, is>);
+  in(ePKc);
+  new eKs;
+  let ePKs = 'g'^eKs in
+  let K = ePKc^eKs in
+  let H = h(<vc, vs, ic, is, pkS, ePKc, ePKs, K>) in
+  let s = sign(H, skS) in
+  event Running('C','S', vc, vs, ic, is, pkS, ePKc, ePKs, K);
+  event Secret(K, vc, pkS);
+  let sid = H in
+  event SessionId(sid, vc, pkS);
+  out(<pkS, ePKs, s>)
+
+/* Key-compromise helper: reveal the server host key upon request */
+let KeyReveal(skS, pkS) =
+  in(req);
+  let <'revealS', =pkS> = req in
+  event Reveal(pkS);
+  out(skS)
+
+/* System composition:
+   - Unboundedly many server keypairs (each declared honest).
+   - For each keypair: unbounded sessions of Server and Client roles, and a reveal helper.
+*/
+process:
+!(
+  new ltKs;
+  let pkS = pk(ltKs) in
+  out(pkS);
+  event HonestServer(pkS);
+  (
+      !KeyReveal(ltKs, pkS)
+    | !Server(ltKs, pkS)
+    | !Client(pkS)
+  )
+)
+
+lemma executability:
+  exists-trace
+  "Ex vc vs ic is pkS e f K #i #j.
+     Running('C','S', vc, vs, ic, is, pkS, e, f, K) @ i
+   & Commit('C','S', vc, vs, ic, is, pkS, e, f, K) @ j
+   & i < j
+   & not (Ex #r. Reveal(pkS) @ r)"
+
+/* Secrecy of the DH shared secret K unless the server host key is revealed */
+lemma secrecy_K:
+  "All K vc pkS #i #h.
+      Secret(K, vc, pkS) @ i
+    & HonestServer(pkS) @ h
+    & not (Ex #r. Reveal(pkS) @ r & r < i)
+   ==> not (Ex #j. K(K) @ j)"
+
+/* Non-injective agreement: Client authenticates Server */
+lemma noninjective_agreement_client:
+  "All vc vs ic is pkS e f K #i.
+     Commit('C','S', vc, vs, ic, is, pkS, e, f, K) @ i
+   ==> (Ex #j. Running('C','S', vc, vs, ic, is, pkS, e, f, K) @ j & j < i)
+       | (Ex #r. Reveal(pkS) @ r)"
+
+/* Injective agreement (uniqueness) unless key reveal */
+lemma injective_agreement_client:
+  "All vc vs ic is pkS e f K #i.
+     Commit('C','S', vc, vs, ic, is, pkS, e, f, K) @ i
+   ==> ((Ex #j. Running('C','S', vc, vs, ic, is, pkS, e, f, K) @ j & j < i
+            & not (Ex #i2. Commit('C','S', vc, vs, ic, is, pkS, e, f, K) @ i2 & not (#i2 = #i)))
+        | (Ex #r. Reveal(pkS) @ r))"
+
+/* Session identifier correctness: sid equals the exchange hash H */
+lemma sid_correctness_client:
+  "All sid vc vs ic is pkS e f K #i #j.
+      SessionId(sid, vc, pkS) @ i
+    & Commit('C','S', vc, vs, ic, is, pkS, e, f, K) @ j
+    & not (Ex #r. Reveal(pkS) @ r)
+   ==> sid = h(<vc, vs, ic, is, pkS, e, f, K>)"
+
+/* Server emits the same session identifier based on the same transcript */
+lemma sid_emitted_by_server:
+  "All vc vs ic is pkS e f K #j.
+     Running('C','S', vc, vs, ic, is, pkS, e, f, K) @ j
+   ==> (Ex sid #k. SessionId(sid, vc, pkS) @ k
+                & sid = h(<vc, vs, ic, is, pkS, e, f, K>))"
+
+end
