@@ -1,0 +1,126 @@
+theory CERT_PATH_SIGNED_TOKEN
+begin
+
+builtins: asymmetric-encryption, signing
+
+functions: h/1, cp/2
+
+/* 
+  Certification-Path Signed Token Protocol (one-pass)
+  - Identities are public keys.
+  - cp(pkB, pkA) encodes a certification path "B → A" to let B recover pkA from the message.
+  - A signs the hash of the message body.
+  - B verifies recipient, signature, decrypts confidential data, and (abstractly) records replay parameters.
+*/
+
+let A(skA) =
+  let pkA = pk(skA) in
+  event RoleA(pkA);
+  in(pkB);
+  new tA;                      // timeliness tag
+  new rA;                      // anti-replay nonce
+  new sgnData;                 // non-confidential, integrity-protected data
+  new encData;                 // confidential data for B only
+  let C = aenc(encData, pkB) in
+  let body = <tA, rA, pkB, sgnData, C> in
+  let digest = h(body) in
+  let sig = sign(digest, skA) in
+  let token = <body, sig> in
+  let certpath = cp(pkB, pkA) in
+  event Running('A','B', pkA, pkB, tA, rA, sgnData, encData);
+  event Secret(encData, pkA, pkB);
+  out(<certpath, token>)
+
+let B(skB) =
+  let pkB = pk(skB) in
+  event RoleB(pkB);
+  in(<cp(pkB, pkA), token>);                       // parse and recover pkA from cp(pkB, pkA)
+  let <body, sig> = token in
+  let <tA, rA, bIdent, sgnData, C> = body in
+  if bIdent = pkB then
+    let digest = h(body) in
+    if verify(sig, digest, pkA) = true then
+      let encData = adec(C, skB) in
+      event Cache(pkB, tA, rA);                    // abstract replay cache record
+      event Commit('A','B', pkA, pkB, tA, rA, sgnData, encData)
+
+let LtkReveal(sk) =
+  in(x);
+  if x = pk(sk) then
+    ( event Reveal(pk(sk)); out(sk) )
+
+
+process:
+  !(
+    new skA; out(pk(skA)); event HonestA(pk(skA));
+    ( LtkReveal(skA) | !A(skA) )
+  )
+  |
+  !(
+    new skB; out(pk(skB)); event HonestB(pk(skB));
+    ( LtkReveal(skB) | !B(skB) )
+  )
+
+/* Lemmas */
+
+/* 1) Secrecy of encData unless B is revealed */
+lemma secrecy_encData:
+  "not(
+     Ex encData pkA pkB #i #j #k.
+       Secret(encData, pkA, pkB) @ i
+       & HonestB(pkB) @ j
+       & K(encData) @ k
+       & not(Ex #r. Reveal(pkB) @ r)
+   )"
+
+/* 2) Injective agreement: B authenticates A with uniqueness (unless A is revealed) */
+lemma inj_agree_B:
+  "All pkA pkB tA rA sgnData encData #i.
+     Commit('A','B', pkA, pkB, tA, rA, sgnData, encData) @ i
+     & (Ex #hA. HonestA(pkA) @ hA) & (Ex #hB. HonestB(pkB) @ hB)
+   ==>
+     ( Ex #j.
+         Running('A','B', pkA, pkB, tA, rA, sgnData, encData) @ j
+         & j < i
+         & not(Ex #i2.
+                 Commit('A','B', pkA, pkB, tA, rA, sgnData, encData) @ i2
+                 & not(#i2 = #i)
+              )
+     )
+     | (Ex #r. Reveal(pkA) @ r)
+  "
+
+/* 3) Non-injective agreement: B authenticates A (unless A is revealed) */
+lemma noninj_agree_B:
+  "All pkA pkB tA rA sgnData encData #i.
+     Commit('A','B', pkA, pkB, tA, rA, sgnData, encData) @ i
+     & (Ex #hA. HonestA(pkA) @ hA) & (Ex #hB. HonestB(pkB) @ hB)
+   ==>
+     (Ex #j. Running('A','B', pkA, pkB, tA, rA, sgnData, encData) @ j & j < i)
+     | (Ex #r. Reveal(pkA) @ r)
+  "
+
+/* 4) Executability / sanity */
+lemma executability:
+  exists-trace
+  "Ex pkA pkB tA rA sgnData encData #i #j #hA #hB.
+      HonestA(pkA) @ hA
+    & HonestB(pkB) @ hB
+    & Running('A','B', pkA, pkB, tA, rA, sgnData, encData) @ i
+    & Commit('A','B', pkA, pkB, tA, rA, sgnData, encData) @ j
+    & i < j
+    & not(Ex #r1. Reveal(pkA) @ r1)
+    & not(Ex #r2. Reveal(pkB) @ r2)
+  "
+
+/* 5) Origin authentication of delivered confidential content */
+lemma content_agreement:
+  "All pkA pkB tA rA sgnData encData #i.
+     Commit('A','B', pkA, pkB, tA, rA, sgnData, encData) @ i
+     & (Ex #hA. HonestA(pkA) @ hA) & (Ex #hB. HonestB(pkB) @ hB)
+   ==>
+     (Ex #j. Running('A','B', pkA, pkB, tA, rA, sgnData, encData) @ j & j < i)
+     | (Ex #r. Reveal(pkA) @ r)
+  "
+
+end

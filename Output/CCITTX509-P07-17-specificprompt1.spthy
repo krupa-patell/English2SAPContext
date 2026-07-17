@@ -1,0 +1,113 @@
+theory ONEPASS_SIGN_ENVELOPE_CERTPATH
+begin
+
+builtins: asymmetric-encryption, signing, hashing
+
+/* Roles */
+
+let A(skA, pkA) =
+  event A_Start(pkA);
+  new rA;
+  new tA;
+  new sgnData;
+  new encData;
+  in(pkB);                                 // obtain peer identity
+  let c = aenc(encData, pkB) in
+  let info = <tA, rA, pkB, sgnData, c> in
+  let digest = h(info) in
+  let sigA = sign(digest, skA) in
+  let cpBA = pkA in                         // abstracted certification path
+  event Running('A', pkA, pkB, tA, rA, sgnData, encData);
+  event Secret(encData, pkA, pkB);
+  out(<cpBA, info, sigA>)
+
+let B(skB, pkB) =
+  event B_Start(pkB);
+  in(m);
+  let <cpBA, info, sigA> = m in
+  let <tA, rA, idB, sgnData, c> = info in
+  let pkA = cpBA in
+  event CertPath(pkA, pkB);
+  if idB = pkB then
+    let digest = h(info) in
+    if verify(sigA, digest, pkA) = true then
+      let encData = adec(c, skB) in
+      event TimeCheck(pkB, tA);
+      event ReplayCheck(pkB, rA, tA);
+      event Secret(encData, pkA, pkB);
+      event Commit('B', pkB, pkA, tA, rA, sgnData, encData)
+
+let CompromiseA(skA) =
+  event Reveal(pk(skA));
+  out(skA)
+
+let CompromiseB(skB) =
+  event Reveal(pk(skB));
+  out(skB)
+
+
+/* System composition */
+
+process:
+!(
+  new skA; let pkA = pk(skA) in
+  out(pkA); event HonestA(pkA);
+  new skB; let pkB = pk(skB) in
+  out(pkB); event HonestB(pkB);
+  ( !A(skA, pkA) | !B(skB, pkB) | !CompromiseA(skA) | !CompromiseB(skB) )
+)
+
+
+/* Lemmas */
+
+// 1) Secrecy of encData unless B is compromised
+lemma secrecy_encData:
+"
+  not(
+    Ex m pkA pkB #i #j.
+      Secret(m, pkA, pkB) @ i
+      & K(m) @ j
+      & not(Ex #r. Reveal(pkB) @ r)
+  )
+"
+
+// 2) Injective agreement (B authenticates A), unless A or B compromised
+lemma injective_agreement_B:
+"
+  All pkB pkA tA rA sgnData encData #i.
+    Commit('B', pkB, pkA, tA, rA, sgnData, encData) @ i
+    ==>
+    (
+      (Ex #j. Running('A', pkA, pkB, tA, rA, sgnData, encData) @ j & j < i)
+      & not(Ex #i2. Commit('B', pkB, pkA, tA, rA, sgnData, encData) @ i2 & not(i2 = i))
+    )
+    | (Ex #r. Reveal(pkA) @ r)
+    | (Ex #r. Reveal(pkB) @ r)
+"
+
+// 3) Non-injective agreement (B authenticates A), unless A or B compromised
+lemma agreement_B:
+"
+  All pkB pkA tA rA sgnData encData #i.
+    Commit('B', pkB, pkA, tA, rA, sgnData, encData) @ i
+    ==>
+    (Ex #j. Running('A', pkA, pkB, tA, rA, sgnData, encData) @ j & j < i)
+    | (Ex #r. Reveal(pkA) @ r)
+    | (Ex #r. Reveal(pkB) @ r)
+"
+
+// 4) Executability with honest parties and no compromise
+lemma executability:
+exists-trace
+"
+  Ex pkA pkB tA rA sgnData encData #i #j #hA #hB.
+    HonestA(pkA) @ hA
+    & HonestB(pkB) @ hB
+    & Running('A', pkA, pkB, tA, rA, sgnData, encData) @ i
+    & Commit('B', pkB, pkA, tA, rA, sgnData, encData) @ j
+    & i < j
+    & not(Ex #r. Reveal(pkA) @ r)
+    & not(Ex #r. Reveal(pkB) @ r)
+"
+
+end

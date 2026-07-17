@@ -24,7 +24,7 @@ PROMPT_GEN_MODEL = os.environ.get("OPENAI_PROMPT_GEN_MODEL", OPENAI_MODEL)
 
 # Benchmark protocols used as few-shot (description -> SAPIC+) examples in the
 # prompt, ordered simplest first. Names refer to the .txt file stem.
-FEW_SHOT_EXAMPLES = ["Denning-Sacco", "EDHOC", "Otway-Rees","NSSK", "NSPK","KEMTLS","Example","SSH", "Naxos", "Toy","Yahalom","Kao-Chow v1","sigfox","Neuman-Stubblebine","Woo-Lam","SPLICE","LAK06"]
+FEW_SHOT_EXAMPLES = ["Denning-Sacco", "EDHOC", "Otway-Rees"]
 
 # --- Validation / repair loop -----------------------------------------------
 TAMARIN_BINARY = os.environ.get("TAMARIN_BINARY", "tamarin-prover")
